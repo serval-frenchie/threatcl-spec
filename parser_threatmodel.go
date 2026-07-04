@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	gg "github.com/hashicorp/go-getter"
@@ -408,31 +409,32 @@ func ensureWithin(base, target string) error {
 	return nil
 }
 
-// Validate that the supplied informatin_asset name is found in the tm
-func (tm *Threatmodel) validateInformationAssetRef(asset string) error {
-	if tm.InformationAssets != nil {
-		foundIa := false
-		for _, ia := range tm.InformationAssets {
-			if asset == ia.Name {
-				foundIa = true
-				break
-			}
-		}
+// resolveInformationAssetRef resolves an information_asset reference — an
+// exact name, or an identifier-safe slug (see Slugify) — to the asset's
+// canonical name.
+func (tm *Threatmodel) resolveInformationAssetRef(asset string) (string, error) {
+	candidates := make([]string, 0, len(tm.InformationAssets))
+	for _, ia := range tm.InformationAssets {
+		candidates = append(candidates, ia.Name)
+	}
 
-		if !foundIa {
-			return fmt.Errorf(
-				"trying to refer to non-existent information_asset '%s'",
-				asset,
-			)
-		}
-	} else {
-		return fmt.Errorf(
-			"trying to refer to non-existent information_asset '%s'",
+	resolved, ambiguous := resolveRef(asset, candidates)
+	if resolved != "" {
+		return resolved, nil
+	}
+
+	if len(ambiguous) > 0 {
+		return "", fmt.Errorf(
+			"ambiguous information_asset reference '%s' (matches: %s)",
 			asset,
+			strings.Join(ambiguous, ", "),
 		)
 	}
 
-	return nil
+	return "", fmt.Errorf(
+		"trying to refer to non-existent information_asset '%s'",
+		asset,
+	)
 }
 
 func (tm *Threatmodel) shiftLegacyDfd() int {
@@ -506,6 +508,51 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 				}
 
 				zones[zone.Name] = nil
+			}
+		}
+
+		// Resolve top-level element trust_zone references (exact name, else
+		// unique slug match) against the declared trust_zone blocks. Values
+		// that match no declared zone are left untouched — a trust_zone
+		// attribute may name an implicit zone that has no block of its own.
+		zoneNames := make([]string, 0, len(zones))
+		for name := range zones {
+			zoneNames = append(zoneNames, name)
+		}
+		sort.Strings(zoneNames)
+
+		resolveZoneRef := func(elemName, ref string) string {
+			resolved, ambiguous := resolveRef(ref, zoneNames)
+			if resolved != "" {
+				return resolved
+			}
+			if len(ambiguous) > 0 {
+				errMap = multierror.Append(errMap, fmt.Errorf(
+					"TM '%s': ambiguous trust_zone '%s' on '%s' (matches: %s)",
+					tm.Name,
+					ref,
+					elemName,
+					strings.Join(ambiguous, ", "),
+				))
+			}
+			return ref
+		}
+
+		for _, process := range adfd.Processes {
+			if process.TrustZone != "" {
+				process.TrustZone = resolveZoneRef(process.Name, process.TrustZone)
+			}
+		}
+
+		for _, external_element := range adfd.ExternalElements {
+			if external_element.TrustZone != "" {
+				external_element.TrustZone = resolveZoneRef(external_element.Name, external_element.TrustZone)
+			}
+		}
+
+		for _, data_store := range adfd.DataStores {
+			if data_store.TrustZone != "" {
+				data_store.TrustZone = resolveZoneRef(data_store.Name, data_store.TrustZone)
 			}
 		}
 
@@ -593,7 +640,7 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 				// While in DataStores, let's check if they have iaRefs, and that they
 				// are valid
 				if data_store.IaLink != "" {
-					err := tm.validateInformationAssetRef(data_store.IaLink)
+					resolved, err := tm.resolveInformationAssetRef(data_store.IaLink)
 					if err != nil {
 						errMap = multierror.Append(errMap, fmt.Errorf(
 							"TM '%s' DFD Data Store '%s' %s",
@@ -601,6 +648,8 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 							data_store.Name,
 							err,
 						))
+					} else {
+						data_store.IaLink = resolved
 					}
 				}
 			}
@@ -624,7 +673,7 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 						// While in DataStores, let's check if they have iaRefs, and that they
 						// are valid
 						if data_store.IaLink != "" {
-							err := tm.validateInformationAssetRef(data_store.IaLink)
+							resolved, err := tm.resolveInformationAssetRef(data_store.IaLink)
 							if err != nil {
 								errMap = multierror.Append(errMap, fmt.Errorf(
 									"TM '%s' DFD Data Store '%s' %s",
@@ -632,6 +681,8 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 									data_store.Name,
 									err,
 								))
+							} else {
+								data_store.IaLink = resolved
 							}
 						}
 					}
@@ -645,11 +696,15 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 				if zone.Processes != nil {
 					for _, process := range zone.Processes {
 						if process.TrustZone != "" && process.TrustZone != zone.Name {
-							errMap = multierror.Append(errMap, fmt.Errorf(
-								"TM '%s': process trust_zone mis-match found in '%s'",
-								tm.Name,
-								process.Name,
-							))
+							if slugMatchesName(process.TrustZone, zone.Name) {
+								process.TrustZone = zone.Name
+							} else {
+								errMap = multierror.Append(errMap, fmt.Errorf(
+									"TM '%s': process trust_zone mis-match found in '%s'",
+									tm.Name,
+									process.Name,
+								))
+							}
 						}
 					}
 				}
@@ -657,11 +712,15 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 				if zone.ExternalElements != nil {
 					for _, external_element := range zone.ExternalElements {
 						if external_element.TrustZone != "" && external_element.TrustZone != zone.Name {
-							errMap = multierror.Append(errMap, fmt.Errorf(
-								"TM '%s': external_element trust_zone mis-match found in '%s'",
-								tm.Name,
-								external_element.Name,
-							))
+							if slugMatchesName(external_element.TrustZone, zone.Name) {
+								external_element.TrustZone = zone.Name
+							} else {
+								errMap = multierror.Append(errMap, fmt.Errorf(
+									"TM '%s': external_element trust_zone mis-match found in '%s'",
+									tm.Name,
+									external_element.Name,
+								))
+							}
 						}
 					}
 				}
@@ -669,11 +728,15 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 				if zone.DataStores != nil {
 					for _, data_store := range zone.DataStores {
 						if data_store.TrustZone != "" && data_store.TrustZone != zone.Name {
-							errMap = multierror.Append(errMap, fmt.Errorf(
-								"TM '%s': data_store trust_zone mis-match found in '%s'",
-								tm.Name,
-								data_store.Name,
-							))
+							if slugMatchesName(data_store.TrustZone, zone.Name) {
+								data_store.TrustZone = zone.Name
+							} else {
+								errMap = multierror.Append(errMap, fmt.Errorf(
+									"TM '%s': data_store trust_zone mis-match found in '%s'",
+									tm.Name,
+									data_store.Name,
+								))
+							}
 						}
 					}
 				}
@@ -686,7 +749,46 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 		// silently double-up an edge through copy/paste.
 		flows := make(map[string]interface{})
 		if adfd.Flows != nil {
+			elementNames := make([]string, 0, len(elements))
+			for name := range elements {
+				elementNames = append(elementNames, name)
+			}
+			sort.Strings(elementNames)
+
 			for _, rawflow := range adfd.Flows {
+				// Resolve from/to references (exact name, else unique slug
+				// match) to canonical element names before any wiring checks,
+				// so slug and dot-notation references behave identically to
+				// exact names downstream (rendering, exports, duplicate
+				// detection).
+				fromAmbiguous := false
+				if resolved, ambiguous := resolveRef(rawflow.From, elementNames); resolved != "" {
+					rawflow.From = resolved
+				} else if len(ambiguous) > 0 {
+					fromAmbiguous = true
+					errMap = multierror.Append(errMap, fmt.Errorf(
+						"TM '%s': ambiguous from connection '%s' for flow '%s' (matches: %s)",
+						tm.Name,
+						rawflow.From,
+						rawflow.Name,
+						strings.Join(ambiguous, ", "),
+					))
+				}
+
+				toAmbiguous := false
+				if resolved, ambiguous := resolveRef(rawflow.To, elementNames); resolved != "" {
+					rawflow.To = resolved
+				} else if len(ambiguous) > 0 {
+					toAmbiguous = true
+					errMap = multierror.Append(errMap, fmt.Errorf(
+						"TM '%s': ambiguous to connection '%s' for flow '%s' (matches: %s)",
+						tm.Name,
+						rawflow.To,
+						rawflow.Name,
+						strings.Join(ambiguous, ", "),
+					))
+				}
+
 				flow := fmt.Sprintf("%s:%s", rawflow.From, rawflow.To)
 				flowKey := fmt.Sprintf("%s:%s:%s", rawflow.From, rawflow.To, rawflow.Name)
 
@@ -701,7 +803,7 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 				}
 
 				// now check that flows connect to legit processes
-				if _, ok := elements[rawflow.From]; !ok {
+				if _, ok := elements[rawflow.From]; !ok && !fromAmbiguous {
 					errMap = multierror.Append(errMap, fmt.Errorf(
 						"TM '%s': invalid from connection for flow '%s'",
 						tm.Name,
@@ -709,7 +811,7 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 					))
 				}
 
-				if _, ok := elements[rawflow.To]; !ok {
+				if _, ok := elements[rawflow.To]; !ok && !toAmbiguous {
 					errMap = multierror.Append(errMap, fmt.Errorf(
 						"TM '%s': invalid to connection for flow '%s'",
 						tm.Name,
@@ -747,14 +849,17 @@ func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
 			}
 			tr.Stride = normalizedStride
 
-			// Validating that InformationAssetRefs are valid
-			for _, iaRef := range tr.InformationAssetRefs {
-				err := tm.validateInformationAssetRef(iaRef)
+			// Resolving InformationAssetRefs (exact name, else unique slug
+			// match) to canonical asset names, validating them along the way
+			for i, iaRef := range tr.InformationAssetRefs {
+				resolved, err := tm.resolveInformationAssetRef(iaRef)
 				if err != nil {
 					errMap = multierror.Append(errMap,
 						fmt.Errorf("TM '%s' / Threat '%s': %s", tm.Name, tr.Description, err),
 					)
+					continue
 				}
+				tr.InformationAssetRefs[i] = resolved
 			}
 
 			// Normalize and validate the optional risk block. likelihood and

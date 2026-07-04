@@ -1,5 +1,41 @@
 ## Unreleased
 
+CHANGES:
+
+* `threatmodel` blocks support an optional `id` attribute: a stable,
+  identifier-safe handle (`^[a-z][a-z0-9_]*$`, unique within a parsed set)
+  that survives renames and lets tooling offer dotted references such as
+  `threatmodel.tower_of_london` (threat model names are arbitrary strings, so
+  they can't appear in dotted HCL traversals). New API:
+  `Threatmodel.Identifier()` returns the declared id or one derived from the
+  name; `DeriveIdentifier` exposes the name→identifier derivation (shared
+  with OTM export ids); `ValidIdentifier` reports whether a string is
+  acceptable as a declared id.
+* Element references now accept identifier-safe slugs alongside exact names.
+  Anywhere a threat model refers to another element by name — DFD `flow`
+  `from`/`to`, `data_store` `information_asset` links, threat
+  `information_asset_refs`, and element `trust_zone` attributes — the
+  reference may be the element's slug in either divider form (`"web-app"` or
+  `"web_app"` for `"Web App"`). Slugs use the same algorithm as the OTM
+  exporter's element ids, now exported as `spec.Slugify` (kebab) and
+  `spec.SlugifyUnderscore`. Exact name matches always win; a slug that
+  matches more than one element is a validation error. References are
+  rewritten to the canonical element name at parse time, so renderers,
+  exporters, and round-tripped HCL always see canonical names. Note this also
+  means a `trust_zone` attribute that slug-matches a declared `trust_zone`
+  block now resolves to that zone instead of creating a separate implicit
+  zone.
+* References can also be written with dot notation instead of quoted strings:
+  `from = process.web_app`, `to = data_store.user_database`,
+  `information_asset_refs = [information_asset.customer_data]`, or
+  `trust_zone = trust_zone.internal_zone`. Namespaces exist for `process`,
+  `external_element`, `data_store`, `information_asset`, and `trust_zone`,
+  built from the element labels in the same file; an unknown slug fails at
+  parse time. Dotted references use underscore slugs — consistent with the
+  `threatmodel` `id` convention, and avoiding the hyphen/subtraction
+  ambiguity in bare HCL expressions. Slugs that aren't valid HCL identifiers
+  (e.g. starting with a digit) can use index syntax: `process["3rd_party"]`.
+
 SECURITY:
 
 * Remote `imports` / `including` sources (http, https, git, s3, gcs, ...) are
@@ -13,18 +49,6 @@ SECURITY:
 * When remote imports are enabled, http/https fetches now refuse to connect to
   loopback and link-local addresses (e.g. the `169.254.169.254` cloud metadata
   endpoint).
-
-CHANGES:
-
-* `threatmodel` blocks support an optional `id` attribute: a stable,
-  identifier-safe handle (`^[a-z][a-z0-9_]*$`, unique within a parsed set)
-  that survives renames and lets tooling offer dotted references such as
-  `threatmodel.tower_of_london` (threat model names are arbitrary strings, so
-  they can't appear in dotted HCL traversals). New API:
-  `Threatmodel.Identifier()` returns the declared id or one derived from the
-  name; `DeriveIdentifier` exposes the name→identifier derivation (shared
-  with OTM export ids); `ValidIdentifier` reports whether a string is
-  acceptable as a declared id.
 
 ## 0.4.0
 
