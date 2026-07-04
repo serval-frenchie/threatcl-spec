@@ -8,7 +8,6 @@ import (
 	"github.com/hashicorp/hcl/v2/hclparse"
 )
 
-
 type ThreatmodelSpecConfig struct {
 	Version                        string
 	InitiativeSizes                []string `hcl:"initiative_sizes,optional"`
@@ -19,6 +18,16 @@ type ThreatmodelSpecConfig struct {
 	STRIDE                         []string `hcl:"strides,optional"`
 	UptimeDepClassifications       []string `hcl:"uptime_dep_classifications,optional"`
 	DefaultUptimeDepClassification string   `hcl:"default_uptime_dep_classification,optional"`
+
+	// AllowRemoteImports gates whether a threat model's `imports` /
+	// `including` may reference remote sources (http, https, git, s3, gcs,
+	// ...). It defaults to false: parsing an untrusted model must not be
+	// able to trigger arbitrary network fetches (SSRF) or pull in remote
+	// content. Operators who intentionally process trusted models that
+	// reference remote sources opt in with `allow_remote_imports = true`.
+	// Local file includes are always permitted (subject to path
+	// containment) regardless of this flag.
+	AllowRemoteImports bool `hcl:"allow_remote_imports,optional"`
 }
 
 func LoadSpecConfig() (*ThreatmodelSpecConfig, error) {
@@ -75,6 +84,10 @@ func (t *ThreatmodelSpecConfig) LoadSpecConfigFile(file string) error {
 		if specConfig.DefaultUptimeDepClassification != "" {
 			t.DefaultUptimeDepClassification = specConfig.DefaultUptimeDepClassification
 		}
+
+		// AllowRemoteImports is a security-relevant toggle, so honour the
+		// value from the config file directly (default false when absent).
+		t.AllowRemoteImports = specConfig.AllowRemoteImports
 
 		return nil
 	}
