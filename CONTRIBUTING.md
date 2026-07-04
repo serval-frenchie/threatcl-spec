@@ -34,13 +34,18 @@ All Go code should be formatted according to https://pkg.go.dev/golang.org/x/too
 
 ## Releasing
 
-This module is a key dependency of https://github.com/threatcl/threatcl, while this repo doesn't have any automated pipelines, it is expected to follow go module git tagging.
+This module is a key dependency of https://github.com/threatcl/threatcl and is
+expected to follow go module git tagging. Pushing a `vN.N.N` tag triggers this
+repo's [release workflow](.github/workflows/release.yml), which publishes a
+GitHub Release with a deterministic source archive, an SPDX SBOM, checksums,
+and a signed build-provenance attestation (see [docs/SLSA.md](docs/SLSA.md)).
 
 To release a new version:
-* See [VERSION_MANAGEMENT](VERSION_MANAGEMENT.md) for how to bump the version
+* See [VERSION_MANAGEMENT](VERSION_MANAGEMENT.md) for how to bump the version —
+  the pushed tag must match `version.go`, or the release workflow stops before
+  publishing anything
 * Update the [CHANGELOG](CHANGELOG.md)
-* Once the main branch has been merged and updated and all the [actions](https://github.com/threatcl/threatcl/actions) are complete - this is basically setup to release "dev" release (without docker)
-* Once that's complete and you're ready to do the primary release, you tag
+* Once the main branch has been merged and updated and all the [actions](https://github.com/threatcl/spec/actions) are green, you tag
 * `git tag -s vN.N.N -m 'vN.N.N'` (a **signed** tag — see [Signing](#signing) below)
 * `git push --tags`
 * Finally, you'll need to adjust the go.mod in http://github.com/threatcl/threatcl
