@@ -219,10 +219,21 @@ func fetchRemoteTm(cfg *ThreatmodelSpecConfig, source, currentFilename string) (
 		)
 	}
 
-	// For local includes, verify the source resolves to a path inside the
-	// directory of the referring file. This blocks file:///etc/passwd and
-	// ../ traversal from copying arbitrary host files into the parse.
-	if !remote {
+	if remote {
+		// Even with remote imports enabled, refuse loopback/link-local
+		// hosts. The SSRF-aware HTTP client (below) enforces this for
+		// http/https at dial time; this pre-flight check additionally
+		// covers getters that dial outside our http.Client — notably
+		// git/hg/s3/gcs. It's best-effort against DNS rebinding (go-getter
+		// re-resolves later), but it blocks the straightforward case such
+		// as git::http://169.254.169.254/....
+		if err := assertRemoteHostAllowed(splitSource[0], absPath); err != nil {
+			return nil, err
+		}
+	} else {
+		// For local includes, verify the source resolves to a path inside
+		// the directory of the referring file. This blocks file:///etc/passwd
+		// and ../ traversal from copying arbitrary host files into the parse.
 		if err := ensureLocalSourceContained(absPath, splitSource[0]); err != nil {
 			return nil, err
 		}
@@ -363,6 +374,58 @@ func ssrfSafeHTTPClient() *http.Client {
 	}
 
 	return &http.Client{Transport: transport}
+}
+
+// assertRemoteHostAllowed resolves the host of a remote import source and
+// rejects it if it maps to a loopback or link-local address. This guards
+// getters (git, hg, s3, gcs) that dial outside our SSRF-aware http.Client.
+func assertRemoteHostAllowed(source, pwd string) error {
+	detected, err := gg.Detect(source, pwd, gg.Detectors)
+	if err != nil {
+		return err
+	}
+
+	host := remoteHost(detected)
+	if host == "" {
+		// Can't determine a host to check; let go-getter proceed. http/https
+		// are still covered by the dialer in ssrfSafeHTTPClient.
+		return nil
+	}
+
+	ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+	if err != nil {
+		return err
+	}
+	for _, ip := range ips {
+		if isBlockedIP(ip.IP) {
+			return fmt.Errorf("refusing to fetch remote import from disallowed address %s (%s)", host, ip.IP)
+		}
+	}
+
+	return nil
+}
+
+// remoteHost extracts the hostname from a go-getter-detected source string,
+// handling forced getter prefixes ("git::..."), URL forms, and scp-like
+// syntax ("git@host:path"). Returns "" when no host can be determined.
+func remoteHost(detected string) string {
+	if _, rest, found := strings.Cut(detected, "::"); found {
+		detected = rest
+	}
+
+	if u, err := url.Parse(detected); err == nil && u.Host != "" {
+		return u.Hostname()
+	}
+
+	// scp-like syntax: [user@]host:path
+	if i := strings.LastIndex(detected, "@"); i >= 0 {
+		detected = detected[i+1:]
+	}
+	if host, _, found := strings.Cut(detected, ":"); found {
+		return host
+	}
+
+	return ""
 }
 
 // isBlockedIP reports whether an address is one that imports must never reach:

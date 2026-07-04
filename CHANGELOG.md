@@ -10,9 +10,10 @@ SECURITY:
 * Local file includes are now contained to the directory of the referring
   file, blocking `file:///etc/passwd` and `../` traversal (including via the
   `repo|subpath` form) from reading arbitrary files off the host.
-* When remote imports are enabled, http/https fetches now refuse to connect to
-  loopback and link-local addresses (e.g. the `169.254.169.254` cloud metadata
-  endpoint).
+* When remote imports are enabled, fetches now refuse to connect to loopback
+  and link-local addresses (e.g. the `169.254.169.254` cloud metadata
+  endpoint). This is enforced at dial time for http/https and via a pre-flight
+  host check for the other getters (git, hg, s3, gcs).
 
 ## 0.4.0
 

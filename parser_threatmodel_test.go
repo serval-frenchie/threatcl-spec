@@ -205,6 +205,40 @@ func TestEnsureWithin(t *testing.T) {
 	}
 }
 
+func TestRemoteHost(t *testing.T) {
+	cases := []struct {
+		detected string
+		want     string
+	}{
+		{"https://github.com/threatcl/spec.git", "github.com"},
+		{"git::https://github.com/threatcl/spec.git", "github.com"},
+		{"git::ssh://git@github.com/threatcl/spec.git", "github.com"},
+		{"git::https://169.254.169.254/x.git", "169.254.169.254"},
+		{"git@github.com:threatcl/spec.git", "github.com"},
+		{"https://example.com:8443/tower.hcl", "example.com"},
+	}
+
+	for _, tc := range cases {
+		if got := remoteHost(tc.detected); got != tc.want {
+			t.Errorf("remoteHost(%q) = %q, want %q", tc.detected, got, tc.want)
+		}
+	}
+}
+
+func TestAssertRemoteHostAllowed(t *testing.T) {
+	// Loopback and link-local hosts must be rejected, even via git.
+	blocked := []string{
+		"git::https://127.0.0.1/x.git",
+		"git::http://169.254.169.254/latest/meta-data/",
+		"https://127.0.0.1/tower.hcl",
+	}
+	for _, src := range blocked {
+		if err := assertRemoteHostAllowed(src, "/tmp"); err == nil {
+			t.Errorf("assertRemoteHostAllowed(%q) = nil, want error", src)
+		}
+	}
+}
+
 func TestParseHCLFileWithIncludingTooMany(t *testing.T) {
 	defaultCfg := &ThreatmodelSpecConfig{}
 	defaultCfg.setDefaults()
