@@ -1,10 +1,13 @@
 package spec
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/zclconf/go-cty/cty"
 	"github.com/zenizh/go-capturer"
 )
 
@@ -445,6 +448,342 @@ func TestAddTMAndWrite(t *testing.T) {
 		t.Error("The tm wasn't added correctly")
 	}
 
+}
+
+// parsercovFailWriter always errors on Write, to exercise the write error
+// branch in AddTMAndWrite
+type parsercovFailWriter struct{}
+
+func (w *parsercovFailWriter) Write(p []byte) (int, error) {
+	return 0, errors.New("parsercov write error")
+}
+
+func TestAddTMAndWriteFailingWriter(t *testing.T) {
+	defaultCfg := &ThreatmodelSpecConfig{}
+	defaultCfg.setDefaults()
+	tmParser := NewThreatmodelParser(defaultCfg)
+
+	// The description needs to be larger than bufio's default buffer so
+	// that the underlying writer's error surfaces from Write
+	tm := Threatmodel{
+		Name:        "test",
+		Author:      "x",
+		Description: strings.Repeat("A", 8192),
+	}
+
+	err := tmParser.AddTMAndWrite(tm, &parsercovFailWriter{}, false)
+
+	if err == nil {
+		t.Error("Expected an error from the failing writer")
+	} else if !strings.Contains(err.Error(), "parsercov write error") {
+		t.Errorf("Unexpected error from failing writer: %s", err)
+	}
+}
+
+func TestParseFileInvalidContents(t *testing.T) {
+	defaultCfg := &ThreatmodelSpecConfig{}
+	defaultCfg.setDefaults()
+	tmParser := NewThreatmodelParser(defaultCfg)
+
+	err := tmParser.ParseFile("./testdata/tm-invalid.hcl", false)
+
+	if err == nil {
+		t.Error("Expected an error parsing a broken HCL TM file via ParseFile")
+	}
+
+	tmParser = NewThreatmodelParser(defaultCfg)
+
+	err = tmParser.ParseFile("./testdata/tm-invalid.json", false)
+
+	if err == nil {
+		t.Error("Expected an error parsing a broken JSON TM file via ParseFile")
+	}
+}
+
+func TestParseHCLFileControlImportFallback(t *testing.T) {
+	defaultCfg := &ThreatmodelSpecConfig{}
+	defaultCfg.setDefaults()
+	tmParser := NewThreatmodelParser(defaultCfg)
+
+	err := tmParser.ParseHCLFile("./testdata/parsercov-tm-fallback.hcl", false)
+
+	if err != nil {
+		t.Fatalf("Error parsing TM file with expanded_control fallback: %s", err)
+	}
+
+	foundFallbackControl := false
+
+	for _, tm := range tmParser.GetWrapped().Threatmodels {
+		if tm.Name == "parsercov_fallback" {
+			for _, threat := range tm.Threats {
+				for _, control := range threat.Controls {
+					if control.Name == "parsercov_fallback_control" &&
+						control.Description == "Control living only in the control namespace" &&
+						control.Implemented == true &&
+						control.RiskReduction == 40 {
+						foundFallbackControl = true
+					}
+				}
+			}
+		}
+	}
+
+	if !foundFallbackControl {
+		t.Errorf("We didn't find the control resolved via the expanded_control fallback")
+	}
+}
+
+func TestParseHCLFileBareExpandedControlImport(t *testing.T) {
+	defaultCfg := &ThreatmodelSpecConfig{}
+	defaultCfg.setDefaults()
+	tmParser := NewThreatmodelParser(defaultCfg)
+
+	err := tmParser.ParseHCLFile("./testdata/parsercov-tm-bare-expanded.hcl", false)
+
+	if err != nil {
+		t.Fatalf("Error parsing TM file with bare expanded control import: %s", err)
+	}
+
+	foundBareExpanded := false
+	foundMiscComponent := false
+
+	for _, tm := range tmParser.GetWrapped().Threatmodels {
+		if tm.Name == "parsercov_bare_expanded" {
+			for _, threat := range tm.Threats {
+				for _, control := range threat.Controls {
+					if control.Name == "bare_expanded" &&
+						control.Description == "Expanded control with no notes or attributes" &&
+						control.ImplementationNotes == "" &&
+						len(control.Attributes) == 0 {
+						foundBareExpanded = true
+					}
+					if control.Name == "misc_component" &&
+						control.Description == "A component of another type" {
+						foundMiscComponent = true
+					}
+				}
+			}
+		}
+	}
+
+	if !foundBareExpanded {
+		t.Errorf("We didn't find the bare expanded control")
+	}
+
+	if !foundMiscComponent {
+		t.Errorf("We didn't find the misc component imported as a control")
+	}
+}
+
+func TestParseHCLFileControlImportEmptyLibrary(t *testing.T) {
+	cases := []struct {
+		name string
+		file string
+		exp  string
+	}{
+		{
+			"empty_expanded_control_import",
+			"./testdata/parsercov-tm-empty-expanded.hcl",
+			"no expanded_control or control imports available",
+		},
+		{
+			"empty_control_import",
+			"./testdata/parsercov-tm-empty-control.hcl",
+			"no control imports available",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			defaultCfg := &ThreatmodelSpecConfig{}
+			defaultCfg.setDefaults()
+			tmParser := NewThreatmodelParser(defaultCfg)
+
+			err := tmParser.ParseHCLFile(tc.file, false)
+
+			if err == nil {
+				t.Errorf("%s: An error was expected but none was thrown", tc.name)
+			} else if !strings.Contains(err.Error(), tc.exp) {
+				t.Errorf("%s: Expected error '%s', got: %s", tc.name, tc.exp, err)
+			}
+		})
+	}
+}
+
+func TestParseHCLRawControlImportErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		exp  string
+	}{
+		{
+			"invalid_import_format",
+			`threatmodel "test" {
+			author = "j"
+			threat "test_threat" {
+				description = "threat"
+				control_imports = ["bogus"]
+			}
+		}`,
+			"invalid control import format: bogus",
+		},
+		{
+			"invalid_import_prefix",
+			`threatmodel "test" {
+			author = "j"
+			threat "test_threat" {
+				description = "threat"
+				control_imports = ["notimport.control.foo"]
+			}
+		}`,
+			"invalid control import format: notimport.control.foo",
+		},
+		{
+			"unsupported_control_type",
+			`threatmodel "test" {
+			author = "j"
+			threat "test_threat" {
+				description = "threat"
+				control_imports = ["import.widget.foo"]
+			}
+		}`,
+			"unsupported control type: widget",
+		},
+		{
+			"no_imports_available",
+			`threatmodel "test" {
+			author = "j"
+			threat "test_threat" {
+				description = "threat"
+				control_imports = ["import.control.foo"]
+			}
+		}`,
+			"no imports available",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			defaultCfg := &ThreatmodelSpecConfig{}
+			defaultCfg.setDefaults()
+			tmParser := NewThreatmodelParser(defaultCfg)
+
+			err := tmParser.ParseHCLRaw([]byte(tc.in))
+
+			if err == nil {
+				t.Errorf("%s: An error was expected but none was thrown", tc.name)
+			} else if !strings.Contains(err.Error(), tc.exp) {
+				t.Errorf("%s: Expected error '%s', got: %s", tc.name, tc.exp, err)
+			}
+		})
+	}
+}
+
+func TestParseHCLRawShallowExtractErrors(t *testing.T) {
+	cases := []struct {
+		name        string
+		in          string
+		exp         string
+		errorthrown bool
+	}{
+		{
+			"variable_missing_label",
+			`variable {
+			 value = "test_var_val"
+			}
+			threatmodel "test" {
+			author = "j"
+			}`,
+			"Missing name for variable",
+			true,
+		},
+		{
+			"variable_value_not_string",
+			`variable "test_var" {
+			 value = ["not", "a", "string"]
+			}
+			threatmodel "test" {
+			author = "j"
+			}`,
+			"Unsuitable value type",
+			true,
+		},
+		{
+			"threatmodel_missing_label",
+			`threatmodel {
+			author = "j"
+			}`,
+			"Missing name for threatmodel",
+			true,
+		},
+		{
+			"imports_not_a_list",
+			`threatmodel "test" {
+			imports = "controls.hcl"
+			author = "j"
+			}`,
+			"Unsuitable value type",
+			true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			defaultCfg := &ThreatmodelSpecConfig{}
+			defaultCfg.setDefaults()
+			tmParser := NewThreatmodelParser(defaultCfg)
+
+			err := tmParser.ParseHCLRaw([]byte(tc.in))
+
+			if err != nil {
+				t.Logf("Err: '%s'. Expected: '%s'.", err.Error(), tc.exp)
+				if !strings.Contains(err.Error(), tc.exp) {
+					t.Errorf("%s: Error parsing hcl tm: %s", tc.name, err)
+				}
+			} else {
+				t.Logf("Expected: '%s'.", tc.exp)
+				if tc.errorthrown {
+					t.Errorf("%s: An error was expected but none was thrown", tc.name)
+				}
+			}
+		})
+	}
+}
+
+func TestResolveControlImportNullEntry(t *testing.T) {
+	defaultCfg := &ThreatmodelSpecConfig{}
+	defaultCfg.setDefaults()
+	tmParser := NewThreatmodelParser(defaultCfg)
+
+	ctx := &hcl.EvalContext{}
+	ctx.Variables = map[string]cty.Value{
+		"import": cty.ObjectVal(map[string]cty.Value{
+			"control": cty.ObjectVal(map[string]cty.Value{
+				"ghost_control": cty.NullVal(cty.EmptyObject),
+			}),
+			"expanded_control": cty.ObjectVal(map[string]cty.Value{}),
+		}),
+	}
+
+	_, err := tmParser.resolveControlImport("import.control.ghost_control", ctx)
+
+	if err == nil {
+		t.Error("Expected an error resolving a null control entry")
+	} else if !strings.Contains(err.Error(), "control 'ghost_control' not found in imports") {
+		t.Errorf("Unexpected error resolving a null control entry: %s", err)
+	}
 }
 
 func TestParseHCLRaw(t *testing.T) {

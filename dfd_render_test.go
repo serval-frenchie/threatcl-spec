@@ -221,6 +221,139 @@ func TestDfdPngGenerateBytes(t *testing.T) {
 	}
 }
 
+// TestDfdSvgGenerateBytesMethod mirrors TestDfdPngGenerateBytes but goes
+// through the public GenerateDfdSvgBytes entrypoint rather than composing
+// generateDfdDot + dotToSvgBytes by hand.
+func TestDfdSvgGenerateBytesMethod(t *testing.T) {
+	cases := []struct {
+		name        string
+		tm          *Threatmodel
+		exp         string
+		errorthrown bool
+	}{
+		{
+			"valid_dfd",
+			dfdTm(),
+			"",
+			false,
+		},
+		{
+			"valid_full_dfd",
+			fullDfdTm(),
+			"",
+			false,
+		},
+		{
+			"valid_full_dfd2",
+			fullDfdTm2(),
+			"",
+			false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+
+		t.Run(tc.name, func(t *testing.T) {
+			for _, adfd := range tc.tm.DataFlowDiagrams {
+				svgBytes, err := adfd.GenerateDfdSvgBytes(tc.tm.Name, DfdRenderOptions{})
+
+				if err != nil {
+					if !strings.Contains(err.Error(), tc.exp) {
+						t.Errorf("%s: Error generating svg bytes: %s", tc.name, err)
+					}
+				} else {
+					if tc.errorthrown {
+						t.Errorf("%s: an error was thrown when it shouldn't have", tc.name)
+					} else {
+						contentType := http.DetectContentType(svgBytes)
+						if !strings.Contains(contentType, "xml") && !strings.Contains(contentType, "svg") {
+							t.Errorf("%s: The output bytes aren't a svg, they're '%s'", tc.name, contentType)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestDfdRenderErrorPropagation confirms every render entrypoint surfaces the
+// error from GenerateDot when a flow references an undeclared node, and that
+// the file-writing variants leave nothing behind.
+func TestDfdRenderErrorPropagation(t *testing.T) {
+	dfd := brokenFlowDfd("known", "ghost_dst")
+	const wantErr = `unknown destination node "ghost_dst"`
+
+	checkErr := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected error for unknown flow endpoint, got nil")
+		}
+		if !strings.Contains(err.Error(), wantErr) {
+			t.Errorf("expected error to contain %q, got: %s", wantErr, err)
+		}
+	}
+
+	t.Run("png_file", func(t *testing.T) {
+		out := fmt.Sprintf("%s/out.png", t.TempDir())
+		checkErr(t, dfd.GenerateDfdPng(out, "tm", DfdRenderOptions{}))
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Errorf("expected no png file to be written, stat err: %v", err)
+		}
+	})
+
+	t.Run("svg_file", func(t *testing.T) {
+		out := fmt.Sprintf("%s/out.svg", t.TempDir())
+		checkErr(t, dfd.GenerateDfdSvg(out, "tm", DfdRenderOptions{}))
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Errorf("expected no svg file to be written, stat err: %v", err)
+		}
+	})
+
+	t.Run("png_bytes", func(t *testing.T) {
+		b, err := dfd.GenerateDfdPngBytes("tm", DfdRenderOptions{})
+		checkErr(t, err)
+		if b != nil {
+			t.Errorf("expected nil png bytes on error, got %d bytes", len(b))
+		}
+	})
+
+	t.Run("svg_bytes", func(t *testing.T) {
+		b, err := dfd.GenerateDfdSvgBytes("tm", DfdRenderOptions{})
+		checkErr(t, err)
+		if b != nil {
+			t.Errorf("expected nil svg bytes on error, got %d bytes", len(b))
+		}
+	})
+}
+
+// TestDfdDotToFileInvalidDot feeds unparseable DOT straight to the file
+// writers so the graphviz-side error branch (as opposed to the GenerateDot
+// error branch) is exercised.
+func TestDfdDotToFileInvalidDot(t *testing.T) {
+	garbage := []byte("this is not dot {{{")
+
+	t.Run("png", func(t *testing.T) {
+		out := fmt.Sprintf("%s/out.png", t.TempDir())
+		if err := dotToPng(garbage, out); err == nil {
+			t.Error("expected error rendering invalid dot to png, got nil")
+		}
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Errorf("expected no png file to be written, stat err: %v", err)
+		}
+	})
+
+	t.Run("svg", func(t *testing.T) {
+		out := fmt.Sprintf("%s/out.svg", t.TempDir())
+		if err := dotToSvg(garbage, out); err == nil {
+			t.Error("expected error rendering invalid dot to svg, got nil")
+		}
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Errorf("expected no svg file to be written, stat err: %v", err)
+		}
+	})
+}
+
 func TestDfdSvgGenerateBytes(t *testing.T) {
 	cases := []struct {
 		name        string

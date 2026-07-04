@@ -74,6 +74,52 @@ func TestTPDRender(t *testing.T) {
 	}
 }
 
+func TestParseTMTemplateToUpperVariants(t *testing.T) {
+	cases := []struct {
+		name  string
+		input interface{}
+		exp   string
+	}{
+		{
+			"uptime_dep_classification",
+			HardUptime,
+			"HARD",
+		},
+		{
+			"plain_string",
+			"soft",
+			"SOFT",
+		},
+		{
+			"unsupported_type",
+			42,
+			"",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpl, err := ParseTMTemplate("{{ ToUpper . }}")
+			if err != nil {
+				t.Fatalf("Error parsing ToUpper template: %s", err)
+			}
+
+			buf := new(strings.Builder)
+			if err := tmpl.Execute(buf, tc.input); err != nil {
+				t.Fatalf("Error executing ToUpper template: %s", err)
+			}
+
+			if buf.String() != tc.exp {
+				t.Errorf("ToUpper returned %q, expected %q", buf.String(), tc.exp)
+			}
+		})
+	}
+}
+
 func TestRenderMarkdownRepository(t *testing.T) {
 	tm := &Threatmodel{
 		Name:   "test",
