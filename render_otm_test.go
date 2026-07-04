@@ -121,6 +121,7 @@ func TestRenderOtm(t *testing.T) {
 	}
 	control.Attributes = append(control.Attributes, controlAttribute)
 	threat := &Threat{
+		Name:        "Attacker spoofs a user",
 		Description: "threat description",
 		Stride: []string{
 			"Spoofing",
@@ -131,6 +132,11 @@ func TestRenderOtm(t *testing.T) {
 	}
 	threat.Controls = append(threat.Controls, control)
 	tm.Threats = append(tm.Threats, threat)
+
+	unnamedThreat := &Threat{
+		Description: "unnamed threat description",
+	}
+	tm.Threats = append(tm.Threats, unnamedThreat)
 
 	otmJson, err := tm.RenderOtm()
 	if err != nil {
@@ -148,6 +154,38 @@ func TestRenderOtm(t *testing.T) {
 
 	if !strings.Contains(string(jsonOut), "https://github.com/threatcl/spec") {
 		t.Errorf("Json (%s) didn't include the repository attribute", string(jsonOut))
+	}
+
+	if len(otmJson.Assets) != 1 {
+		t.Fatalf("Expected 1 asset but got %d", len(otmJson.Assets))
+	}
+
+	if otmJson.Assets[0].Attributes["information_classification"] != "Confidential" {
+		t.Errorf("Asset attributes (%v) didn't include the information classification", otmJson.Assets[0].Attributes)
+	}
+
+	if otmJson.Assets[0].Attributes["source"] != "source" {
+		t.Errorf("Asset attributes (%v) didn't include the source", otmJson.Assets[0].Attributes)
+	}
+
+	if len(otmJson.Threats) != 2 {
+		t.Fatalf("Expected 2 threats but got %d", len(otmJson.Threats))
+	}
+
+	if otmJson.Threats[0].Name != "Attacker spoofs a user" {
+		t.Errorf("Threat name should have been 'Attacker spoofs a user' but was '%s'", otmJson.Threats[0].Name)
+	}
+
+	if otmJson.Threats[0].Id != "attacker-spoofs-a-user" {
+		t.Errorf("Threat id should have been 'attacker-spoofs-a-user' but was '%s'", otmJson.Threats[0].Id)
+	}
+
+	if otmJson.Threats[1].Name != "Threat 2" {
+		t.Errorf("Unnamed threat should have fallen back to 'Threat 2' but was '%s'", otmJson.Threats[1].Name)
+	}
+
+	if otmJson.Threats[1].Id != "threat-2" {
+		t.Errorf("Unnamed threat id should have been 'threat-2' but was '%s'", otmJson.Threats[1].Id)
 	}
 
 }
