@@ -1,3 +1,19 @@
+## Unreleased
+
+SECURITY:
+
+* Remote `imports` / `including` sources (http, https, git, s3, gcs, ...) are
+  now disabled by default. Parsing a threat model no longer triggers arbitrary
+  network fetches or remote content inclusion unless the operator opts in with
+  `allow_remote_imports = true` in their threatcl config. This closes an SSRF /
+  remote-fetch vector reachable purely by parsing an untrusted model.
+* Local file includes are now contained to the directory of the referring
+  file, blocking `file:///etc/passwd` and `../` traversal (including via the
+  `repo|subpath` form) from reading arbitrary files off the host.
+* When remote imports are enabled, http/https fetches now refuse to connect to
+  loopback and link-local addresses (e.g. the `169.254.169.254` cloud metadata
+  endpoint).
+
 ## 0.4.0
 
 ### June 27, 2026

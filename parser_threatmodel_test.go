@@ -62,6 +62,7 @@ func TestParseHCLFileWithIncluding(t *testing.T) {
 func TestParseHCLFileWithIncludingRemote(t *testing.T) {
 	defaultCfg := &ThreatmodelSpecConfig{}
 	defaultCfg.setDefaults()
+	defaultCfg.AllowRemoteImports = true
 	tmParser := NewThreatmodelParser(defaultCfg)
 
 	err := tmParser.ParseFile("./testdata/including/corp-app-remote.hcl", false)
@@ -91,6 +92,7 @@ func TestParseHCLFileWithIncludingRemote(t *testing.T) {
 func TestParseHCLFileWithIncludingRemoteGit(t *testing.T) {
 	defaultCfg := &ThreatmodelSpecConfig{}
 	defaultCfg.setDefaults()
+	defaultCfg.AllowRemoteImports = true
 	tmParser := NewThreatmodelParser(defaultCfg)
 
 	err := tmParser.ParseFile("./testdata/including/corp-app-remote2.hcl", false)
@@ -115,6 +117,92 @@ func TestParseHCLFileWithIncludingRemoteGit(t *testing.T) {
 		t.Errorf("We didn't find an IA that should have been overwritten")
 	}
 
+}
+
+func TestRemoteImportDisabledByDefault(t *testing.T) {
+	defaultCfg := &ThreatmodelSpecConfig{}
+	defaultCfg.setDefaults()
+	// AllowRemoteImports defaults to false; a remote `including` must be
+	// rejected before any network fetch happens.
+	tmParser := NewThreatmodelParser(defaultCfg)
+
+	err := tmParser.ParseFile("./testdata/including/corp-app-remote.hcl", false)
+	if err == nil {
+		t.Fatalf("expected remote import to be rejected when allow_remote_imports is false")
+	}
+
+	if !strings.Contains(err.Error(), "allow_remote_imports") {
+		t.Errorf("expected error to mention allow_remote_imports, got: %s", err)
+	}
+}
+
+func TestIsRemoteSource(t *testing.T) {
+	cases := []struct {
+		src  string
+		want bool
+	}{
+		{"shared/tower.hcl", false},
+		{"tower.hcl", false},
+		{"file:///etc/passwd", false},
+		{"https://example.com/tower.hcl", true},
+		{"http://169.254.169.254/latest/meta-data/", true},
+		{"git::https://github.com/threatcl/spec.git", true},
+		{"github.com/threatcl/spec", true},
+	}
+
+	for _, tc := range cases {
+		got, err := isRemoteSource(tc.src, "/tmp")
+		if err != nil {
+			t.Errorf("isRemoteSource(%q) unexpected error: %s", tc.src, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("isRemoteSource(%q) = %v, want %v", tc.src, got, tc.want)
+		}
+	}
+}
+
+func TestEnsureLocalSourceContained(t *testing.T) {
+	base := "/home/user/models"
+
+	allowed := []string{
+		"tower.hcl",
+		"shared/tower.hcl",
+		"./shared/tower.hcl",
+	}
+	for _, src := range allowed {
+		if err := ensureLocalSourceContained(base, src); err != nil {
+			t.Errorf("ensureLocalSourceContained(%q) = %v, want nil", src, err)
+		}
+	}
+
+	blocked := []string{
+		"../../../etc/passwd",
+		"file:///etc/passwd",
+		"/etc/passwd",
+		"shared/../../secrets.hcl",
+	}
+	for _, src := range blocked {
+		if err := ensureLocalSourceContained(base, src); err == nil {
+			t.Errorf("ensureLocalSourceContained(%q) = nil, want error", src)
+		}
+	}
+}
+
+func TestEnsureWithin(t *testing.T) {
+	base := "/tmp/hcltm123/nest"
+
+	if err := ensureWithin(base, base+"/tower.hcl"); err != nil {
+		t.Errorf("ensureWithin in-tree = %v, want nil", err)
+	}
+	if err := ensureWithin(base, base+"/sub/dir/tower.hcl"); err != nil {
+		t.Errorf("ensureWithin nested in-tree = %v, want nil", err)
+	}
+
+	// The "repo|../../etc/passwd" traversal form must be rejected.
+	if err := ensureWithin(base, base+"/../../../../etc/passwd"); err == nil {
+		t.Errorf("ensureWithin traversal = nil, want error")
+	}
 }
 
 func TestParseHCLFileWithIncludingTooMany(t *testing.T) {

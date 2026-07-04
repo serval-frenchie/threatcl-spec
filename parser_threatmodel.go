@@ -1,7 +1,11 @@
 package spec
 
 import (
+	"context"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,15 +184,6 @@ func (tm *Threatmodel) addMermaidIfNotExist(newMermaid MermaidDiagram) {
 func fetchRemoteTm(cfg *ThreatmodelSpecConfig, source, currentFilename string) (*ThreatmodelParser, error) {
 	returnParser := NewThreatmodelParser(cfg)
 
-	tmpDir, err := os.MkdirTemp("", "hcltm")
-	if err != nil {
-		return nil, err
-	}
-
-	// @TODO The below refers to a non-existent folder
-	// to cater for https://github.com/hashicorp/go-getter/issues/114
-	tmpDir = fmt.Sprintf("%s/nest", tmpDir)
-
 	absPath, err := filepath.Abs(currentFilename)
 	if err != nil {
 		return nil, err
@@ -207,11 +202,47 @@ func fetchRemoteTm(cfg *ThreatmodelSpecConfig, source, currentFilename string) (
 	// git::ssh://git@github.com/xntrik/test|aws-security-checklist.hcl
 	splitSource := strings.SplitN(source, "|", 2)
 
+	// Classify the source before fetching anything. Local file includes are
+	// always allowed (subject to the containment checks below); remote
+	// sources (http, https, git, s3, gcs, ...) are gated behind the
+	// allow_remote_imports config flag so that parsing an untrusted model
+	// can't be turned into an SSRF or remote-fetch primitive by default.
+	remote, err := isRemoteSource(splitSource[0], absPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if remote && !cfg.AllowRemoteImports {
+		return nil, fmt.Errorf(
+			"remote import of '%s' is disabled; set allow_remote_imports = true in your threatcl config to permit fetching remote sources",
+			splitSource[0],
+		)
+	}
+
+	// For local includes, verify the source resolves to a path inside the
+	// directory of the referring file. This blocks file:///etc/passwd and
+	// ../ traversal from copying arbitrary host files into the parse.
+	if !remote {
+		if err := ensureLocalSourceContained(absPath, splitSource[0]); err != nil {
+			return nil, err
+		}
+	}
+
+	tmpDir, err := os.MkdirTemp("", "hcltm")
+	if err != nil {
+		return nil, err
+	}
+
+	// @TODO The below refers to a non-existent folder
+	// to cater for https://github.com/hashicorp/go-getter/issues/114
+	tmpDir = fmt.Sprintf("%s/nest", tmpDir)
+
 	client := gg.Client{
-		Src:  splitSource[0],
-		Dst:  tmpDir,
-		Pwd:  absPath,
-		Mode: gg.ClientModeAny,
+		Src:     splitSource[0],
+		Dst:     tmpDir,
+		Pwd:     absPath,
+		Mode:    gg.ClientModeAny,
+		Getters: importGetters(cfg.AllowRemoteImports),
 	}
 
 	err = client.Get()
@@ -219,26 +250,22 @@ func fetchRemoteTm(cfg *ThreatmodelSpecConfig, source, currentFilename string) (
 		return nil, err
 	}
 
-	// err = filepath.Walk(tmpDir,
-	// 	func(path string, info os.FileInfo, err error) error {
-	// 		if err != nil {
-	// 			return err
-	// 		}
-	// 		fmt.Println(path, info.Size())
-	// 		return nil
-	// 	})
-	// if err != nil {
-	// 	fmt.Println("Error: ", err)
-	// }
-
 	includePath := ""
 
 	switch len(splitSource) {
 	case 1:
-		includePath = fmt.Sprintf("%s/%s", tmpDir, filepath.Base(source))
+		includePath = filepath.Join(tmpDir, filepath.Base(source))
 	case 2:
-		includePath = fmt.Sprintf("%s/%s", tmpDir, splitSource[1])
+		includePath = filepath.Join(tmpDir, splitSource[1])
 	}
+
+	// Ensure the file handed to the parser is still inside the download
+	// directory. This stops the "repo|../../etc/passwd" form from escaping
+	// tmpDir to read arbitrary local files.
+	if err := ensureWithin(tmpDir, includePath); err != nil {
+		return nil, err
+	}
+
 	importDiag := returnParser.ParseHCLFile(includePath, false)
 
 	if importDiag != nil {
@@ -246,6 +273,139 @@ func fetchRemoteTm(cfg *ThreatmodelSpecConfig, source, currentFilename string) (
 	}
 
 	return returnParser, nil
+}
+
+// isRemoteSource reports whether a go-getter source string resolves to a
+// non-local getter (git, http, https, s3, gcs, hg, ...). Local file includes
+// resolve to the "file" getter and return false.
+func isRemoteSource(source, pwd string) (bool, error) {
+	detected, err := gg.Detect(source, pwd, gg.Detectors)
+	if err != nil {
+		return false, err
+	}
+
+	// go-getter forces a getter with a "<getter>::" prefix, e.g.
+	// "git::https://...". When that's absent the URL scheme selects the
+	// getter.
+	getter := ""
+	if before, _, found := strings.Cut(detected, "::"); found {
+		getter = before
+	} else if u, perr := url.Parse(detected); perr == nil {
+		getter = u.Scheme
+	}
+
+	return getter != "" && getter != "file", nil
+}
+
+// importGetters returns the go-getter getter set used for imports. When remote
+// imports are disabled only the local "file" getter is available. When enabled
+// the full default set is available, but http/https are served by an
+// SSRF-aware client that refuses to connect to loopback/link-local addresses
+// (which cover cloud metadata endpoints such as 169.254.169.254).
+func importGetters(allowRemote bool) map[string]gg.Getter {
+	getters := map[string]gg.Getter{
+		"file": new(gg.FileGetter),
+	}
+
+	if allowRemote {
+		httpGetter := &gg.HttpGetter{
+			Netrc:  true,
+			Client: ssrfSafeHTTPClient(),
+		}
+		getters["git"] = new(gg.GitGetter)
+		getters["gcs"] = new(gg.GCSGetter)
+		getters["hg"] = new(gg.HgGetter)
+		getters["s3"] = new(gg.S3Getter)
+		getters["http"] = httpGetter
+		getters["https"] = httpGetter
+	}
+
+	return getters
+}
+
+// ssrfSafeHTTPClient returns an http.Client whose dialer resolves the target
+// host and refuses to connect to loopback, link-local, or unspecified
+// addresses. It dials the resolved IP directly to avoid a DNS-rebinding
+// window between the check and the connection.
+func ssrfSafeHTTPClient() *http.Client {
+	dialer := &net.Dialer{}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+
+			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+
+			var lastErr error
+			for _, ip := range ips {
+				if isBlockedIP(ip.IP) {
+					return nil, fmt.Errorf("refusing to connect to disallowed address %s", ip.IP)
+				}
+			}
+			for _, ip := range ips {
+				conn, derr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
+				if derr == nil {
+					return conn, nil
+				}
+				lastErr = derr
+			}
+			if lastErr == nil {
+				lastErr = fmt.Errorf("no addresses found for %s", host)
+			}
+			return nil, lastErr
+		},
+	}
+
+	return &http.Client{Transport: transport}
+}
+
+// isBlockedIP reports whether an address is one that imports must never reach:
+// loopback (127.0.0.0/8, ::1), link-local (169.254.0.0/16 — the cloud metadata
+// range — and fe80::/10), or the unspecified address. Private RFC1918 ranges
+// are intentionally allowed, since internal git/http servers are legitimate
+// import sources.
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified()
+}
+
+// ensureLocalSourceContained verifies that a local (file) getter source
+// resolves to a path inside baseDir. source may be a plain path or a file://
+// URL, absolute or relative to baseDir.
+func ensureLocalSourceContained(baseDir, source string) error {
+	p := source
+	if u, err := url.Parse(source); err == nil && u.Scheme == "file" {
+		p = u.Path
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(baseDir, p)
+	}
+
+	if err := ensureWithin(baseDir, p); err != nil {
+		return fmt.Errorf("local import '%s' resolves outside the directory of the referring file", source)
+	}
+
+	return nil
+}
+
+// ensureWithin returns an error unless target, once cleaned, is inside base.
+func ensureWithin(base, target string) error {
+	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(target))
+	if err != nil {
+		return fmt.Errorf("unable to resolve path '%s': %w", target, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("path '%s' escapes the permitted directory", target)
+	}
+	return nil
 }
 
 // Validate that the supplied informatin_asset name is found in the tm
