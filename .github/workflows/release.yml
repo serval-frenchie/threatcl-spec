@@ -18,10 +18,17 @@ jobs:
       id-token: write      # OIDC token for Sigstore signing of provenance
       attestations: write  # store the build-provenance attestation
     steps:
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
-      - name: Build deterministic source archive + checksums
+      - name: Build deterministic source archive
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
@@ -37,8 +44,25 @@ jobs:
           # Reproducible archive: git archive uses fixed (commit-time) mtimes and
           # gzip -n drops the timestamp/name, so the bytes are reproducible.
           git archive --format=tar --prefix="${PREFIX}/" HEAD | gzip -9 -n > "${PREFIX}.tar.gz"
-          sha256sum "${PREFIX}.tar.gz" > SHA256SUMS
           echo "ARCHIVE=${PREFIX}.tar.gz" >> "${GITHUB_ENV}"
+          echo "SBOM=${PREFIX}.spdx.json" >> "${GITHUB_ENV}"
+
+      # SPDX SBOM of the Go module tree (syft reads go.mod/go.sum): a static
+      # inventory of what this release depends on, so CVEs disclosed later can
+      # be matched against historical releases without rebuilding them.
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: ${{ env.SBOM }}
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          sha256sum "${ARCHIVE}" "${SBOM}" > SHA256SUMS
           cat SHA256SUMS
 
       - name: Attest build provenance
@@ -46,6 +70,7 @@ jobs:
         with:
           subject-path: |
             spec-*.tar.gz
+            spec-*.spdx.json
             SHA256SUMS
 
       - name: Create GitHub Release
@@ -54,6 +79,6 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "${GITHUB_REF_NAME}" \
-            "${ARCHIVE}" SHA256SUMS \
+            "${ARCHIVE}" "${SBOM}" SHA256SUMS \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes
