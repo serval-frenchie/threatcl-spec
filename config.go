@@ -8,7 +8,6 @@ import (
 	"github.com/hashicorp/hcl/v2/hclparse"
 )
 
-
 type ThreatmodelSpecConfig struct {
 	Version                        string
 	InitiativeSizes                []string `hcl:"initiative_sizes,optional"`

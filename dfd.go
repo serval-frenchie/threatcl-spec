@@ -15,8 +15,8 @@ const (
 	externalShape = "diamond"
 	dataStoreCap  = "cylinder"
 
-	processFill  = "#9ed3ff"
-	externalFill = "#ffd59e"
+	processFill   = "#9ed3ff"
+	externalFill  = "#ffd59e"
 	dataStoreFill = "#fffb9e"
 
 	trustBoundaryColor = "red"
