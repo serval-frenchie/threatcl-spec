@@ -38,6 +38,12 @@ func TestControlStringConstraint(t *testing.T) {
 			false,
 		},
 		{
+			"old_version_and_expanded_control_block",
+			"./testdata/constraintcov-expanded.hcl",
+			[]string{"Deprecation warning: This threat model has defined `expanded_control`"},
+			false,
+		},
+		{
 			"multiple_constraints",
 			"./testdata/tm-constraint-multiple.hcl",
 			[]string{
@@ -120,6 +126,89 @@ func TestVersionConstraintsDeterministic(t *testing.T) {
 		if constraintMsg != exp {
 			t.Fatalf("Expected constraint message:\n%s\n\nGot:\n%s", exp, constraintMsg)
 		}
+	}
+}
+
+func TestConstraintCovAsOf(t *testing.T) {
+	cases := []struct {
+		name       string
+		constraint hcltmConstraint
+		exp        string
+	}{
+		{"control_string_to_block", &controlStringToBlock{}, "0.1.5"},
+		{"proposed_control_to_block", &proposedControlToBlock{}, "0.1.5"},
+		{"expanded_control_to_control", &expandedControlToControl{}, "0.1.17"},
+		{"multi_dfd", &multiDfd{}, "0.1.6"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.constraint.asOf(); got != tc.exp {
+				t.Errorf("Expected asOf %s, got %s", tc.exp, got)
+			}
+
+			// The deprecation message should reference the asOf version
+			if !strings.Contains(tc.constraint.msg(), fmt.Sprintf("v%s", tc.exp)) {
+				t.Errorf("Expected msg to mention v%s, got: %s", tc.exp, tc.constraint.msg())
+			}
+		})
+	}
+}
+
+func TestConstraintCovEmitNoMatch(t *testing.T) {
+	defaultCfg := &ThreatmodelSpecConfig{}
+	defaultCfg.setDefaults()
+	tmParser := NewThreatmodelParser(defaultCfg)
+
+	err := tmParser.ParseFile("./testdata/constraintcov-clean.hcl", false)
+	if err != nil {
+		t.Fatalf("Error parsing hcl file: %s", err)
+	}
+
+	// emit=true exercises the stdout path; the clean fixture matches no
+	// constraints so nothing is actually printed
+	constraintMsg, err := VersionConstraints(tmParser.GetWrapped(), true)
+	if err != nil {
+		t.Fatalf("Error parsing constraints: %s", err)
+	}
+
+	if constraintMsg != "" {
+		t.Errorf("Expected no constraint warnings, got: %s", constraintMsg)
+	}
+}
+
+func TestConstraintCovInvalidSpecVersion(t *testing.T) {
+	tmw := &ThreatmodelWrapped{
+		SpecVersion: "not-a-version",
+	}
+
+	constraintMsg, err := VersionConstraints(tmw, false)
+	if err == nil {
+		t.Error("Expected an error from VersionConstraints for an invalid spec version")
+	} else if !strings.Contains(err.Error(), "malformed version") {
+		t.Errorf("Expected malformed version error, got: %s", err)
+	}
+
+	if constraintMsg != "" {
+		t.Errorf("Expected empty constraint message on error, got: %s", constraintMsg)
+	}
+
+	sb := &strings.Builder{}
+	constraintMsg, err = VersionConstraintsToWriter(tmw, sb)
+	if err == nil {
+		t.Error("Expected an error from VersionConstraintsToWriter for an invalid spec version")
+	} else if !strings.Contains(err.Error(), "malformed version") {
+		t.Errorf("Expected malformed version error, got: %s", err)
+	}
+
+	if constraintMsg != "" {
+		t.Errorf("Expected empty constraint message on error, got: %s", constraintMsg)
+	}
+
+	if sb.String() != "" {
+		t.Errorf("Expected nothing written on error, got: %s", sb.String())
 	}
 }
 

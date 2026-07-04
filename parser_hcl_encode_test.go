@@ -1,8 +1,12 @@
 package spec
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/hcl/v2/hclwrite"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // reparse renders the parser's wrapped state to HCL, parses it back into a
@@ -287,6 +291,252 @@ threatmodel "legacy_dfd_owner" {
 	if len(ldfd.Processes) != 1 || len(ldfd.ExternalElements) != 1 || len(ldfd.Flows) != 1 {
 		t.Errorf("legacy dfd children lost: %+v", ldfd)
 	}
+}
+
+// TestRoundTripSkipsNilControlEntry ensures a nil pointer inside a block
+// slice (e.g. a nil *Control appended programmatically) is skipped rather
+// than panicking or emitting an empty block.
+func TestRoundTripSkipsNilControlEntry(t *testing.T) {
+	src := `spec_version = "` + Version + `"
+
+threatmodel "nilblock" {
+  author = "tester"
+  threat "t" {
+    description = "d"
+    control "real" {
+      description = "real control"
+    }
+  }
+}
+`
+	cfg := &ThreatmodelSpecConfig{}
+	cfg.setDefaults()
+	p := NewThreatmodelParser(cfg)
+	if err := p.ParseHCLRaw([]byte(src)); err != nil {
+		t.Fatalf("initial parse failed: %s", err)
+	}
+
+	// Splice a nil entry into the block slice, as programmatic callers can.
+	th := p.GetWrapped().Threatmodels[0].Threats[0]
+	th.Controls = append([]*Control{nil}, th.Controls...)
+
+	out := p.HclString()
+	if !strings.Contains(out, `control "real"`) {
+		t.Errorf("real control block missing:\n%s", out)
+	}
+	if got := strings.Count(out, "control "); got != 1 {
+		t.Errorf("expected exactly 1 control block, got %d:\n%s", got, out)
+	}
+
+	p2 := reparse(t, p)
+	controls := p2.GetWrapped().Threatmodels[0].Threats[0].Controls
+	if len(controls) != 1 || controls[0].Name != "real" {
+		t.Errorf("round-trip controls = %+v, want single %q", controls, "real")
+	}
+}
+
+// hclEncodeIfaceHolder gives tests a reflect.Value whose Kind is Interface
+// (reflect.ValueOf on a bare interface{} unwraps to the concrete type).
+type hclEncodeIfaceHolder struct {
+	I interface{}
+}
+
+func hclEncodeIfaceValue(v interface{}) reflect.Value {
+	h := hclEncodeIfaceHolder{I: v}
+	return reflect.ValueOf(&h).Elem().Field(0)
+}
+
+func TestIsZeroForHclAllKinds(t *testing.T) {
+	nonNilStr := "x"
+	tests := []struct {
+		name string
+		val  reflect.Value
+		want bool
+	}{
+		{"empty string", reflect.ValueOf(""), true},
+		{"non-empty string", reflect.ValueOf("a"), false},
+		{"false bool", reflect.ValueOf(false), true},
+		{"true bool", reflect.ValueOf(true), false},
+		{"zero int", reflect.ValueOf(0), true},
+		{"non-zero int", reflect.ValueOf(7), false},
+		{"zero int64", reflect.ValueOf(int64(0)), true},
+		{"non-zero int64", reflect.ValueOf(int64(-3)), false},
+		{"zero uint", reflect.ValueOf(uint(0)), true},
+		{"non-zero uint", reflect.ValueOf(uint(9)), false},
+		{"zero uint8", reflect.ValueOf(uint8(0)), true},
+		{"non-zero uint8", reflect.ValueOf(uint8(1)), false},
+		{"zero float64", reflect.ValueOf(float64(0)), true},
+		{"non-zero float64", reflect.ValueOf(3.14), false},
+		{"zero float32", reflect.ValueOf(float32(0)), true},
+		{"non-zero float32", reflect.ValueOf(float32(1.5)), false},
+		{"nil slice", reflect.ValueOf([]string(nil)), true},
+		{"empty slice", reflect.ValueOf([]string{}), true},
+		{"non-empty slice", reflect.ValueOf([]string{"a"}), false},
+		{"nil map", reflect.ValueOf(map[string]string(nil)), true},
+		{"empty map", reflect.ValueOf(map[string]string{}), true},
+		{"non-empty map", reflect.ValueOf(map[string]string{"k": "v"}), false},
+		{"nil pointer", reflect.ValueOf((*string)(nil)), true},
+		{"non-nil pointer", reflect.ValueOf(&nonNilStr), false},
+		{"nil interface", hclEncodeIfaceValue(nil), true},
+		{"non-nil interface", hclEncodeIfaceValue("x"), false},
+		{"zero struct", reflect.ValueOf(Risk{}), true},
+		{"non-zero struct", reflect.ValueOf(Risk{Likelihood: "high"}), false},
+		// Kinds outside the switch fall through to `return false`, even
+		// when the value is that kind's zero value.
+		{"zero complex (default case)", reflect.ValueOf(complex(0, 0)), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isZeroForHcl(tc.val); got != tc.want {
+				t.Errorf("isZeroForHcl(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMakeCtyValueKinds(t *testing.T) {
+	var nilFuncSlice []func()
+	tests := []struct {
+		name   string
+		val    reflect.Value
+		want   cty.Value
+		wantOk bool
+	}{
+		{"string", reflect.ValueOf("hello"), cty.StringVal("hello"), true},
+		{"bool", reflect.ValueOf(true), cty.True, true},
+		{"int", reflect.ValueOf(42), cty.NumberIntVal(42), true},
+		{"int64", reflect.ValueOf(int64(99)), cty.NumberIntVal(99), true},
+		{"uint", reflect.ValueOf(uint(7)), cty.NumberIntVal(7), true},
+		{"float64", reflect.ValueOf(1.5), cty.NumberFloatVal(1.5), true},
+		{"string slice", reflect.ValueOf([]string{"a", "b"}),
+			cty.ListVal([]cty.Value{cty.StringVal("a"), cty.StringVal("b")}), true},
+		// A nil slice of a convertible element type emits an empty list
+		// rather than null.
+		{"nil string slice", reflect.ValueOf([]string(nil)),
+			cty.ListValEmpty(cty.String), true},
+		{"nil int slice", reflect.ValueOf([]int(nil)),
+			cty.ListValEmpty(cty.Number), true},
+		{"string map", reflect.ValueOf(map[string]string{"k": "v"}),
+			cty.MapVal(map[string]cty.Value{"k": cty.StringVal("v")}), true},
+		// Unconvertible types report !ok instead of emitting a value.
+		{"func", reflect.ValueOf(func() {}), cty.NilVal, false},
+		{"untagged struct", reflect.ValueOf(struct{ A string }{A: "x"}), cty.NilVal, false},
+		// A nil slice whose element type is unconvertible falls through the
+		// empty-list shortcut and then fails the general conversion.
+		{"nil func slice", reflect.ValueOf(nilFuncSlice), cty.NilVal, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := makeCtyValue(tc.val)
+			if ok != tc.wantOk {
+				t.Fatalf("makeCtyValue(%s) ok = %v, want %v", tc.name, ok, tc.wantOk)
+			}
+			if !tc.wantOk {
+				return
+			}
+			if !got.RawEquals(tc.want) {
+				t.Errorf("makeCtyValue(%s) = %#v, want %#v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// hclEncodeBadAttr has a required attr whose type can't convert to cty; the
+// encoder should skip it and keep the convertible attribute.
+type hclEncodeBadAttr struct {
+	Name string `hcl:"name"`
+	Bad  func() `hcl:"bad"`
+}
+
+func TestEncodeBodyEdgeCases(t *testing.T) {
+	t.Run("pointer to struct is dereferenced", func(t *testing.T) {
+		f := hclwrite.NewEmptyFile()
+		v := &hclEncodeBadAttr{Name: "n1"}
+		encodeBody(f.Body(), reflect.ValueOf(v))
+		out := string(f.Bytes())
+		if !strings.Contains(out, `name = "n1"`) {
+			t.Errorf("expected name attribute, got:\n%s", out)
+		}
+	})
+
+	t.Run("nil pointer emits nothing", func(t *testing.T) {
+		f := hclwrite.NewEmptyFile()
+		encodeBody(f.Body(), reflect.ValueOf((*hclEncodeBadAttr)(nil)))
+		if out := string(f.Bytes()); out != "" {
+			t.Errorf("expected empty output, got:\n%s", out)
+		}
+	})
+
+	t.Run("non-struct emits nothing", func(t *testing.T) {
+		f := hclwrite.NewEmptyFile()
+		encodeBody(f.Body(), reflect.ValueOf("not a struct"))
+		if out := string(f.Bytes()); out != "" {
+			t.Errorf("expected empty output, got:\n%s", out)
+		}
+	})
+
+	t.Run("unconvertible attr is skipped", func(t *testing.T) {
+		f := hclwrite.NewEmptyFile()
+		encodeBody(f.Body(), reflect.ValueOf(hclEncodeBadAttr{Name: "n2", Bad: func() {}}))
+		out := string(f.Bytes())
+		if !strings.Contains(out, `name = "n2"`) {
+			t.Errorf("expected name attribute, got:\n%s", out)
+		}
+		if strings.Contains(out, "bad") {
+			t.Errorf("unconvertible attr should be skipped, got:\n%s", out)
+		}
+	})
+}
+
+// hclEncodeInnerBlock is a labelled block struct for direct emit tests.
+type hclEncodeInnerBlock struct {
+	Label string `hcl:"label,label"`
+	Val   string `hcl:"val"`
+}
+
+func TestEmitBlockFieldEdgeCases(t *testing.T) {
+	t.Run("nil pointer slice element is skipped", func(t *testing.T) {
+		f := hclwrite.NewEmptyFile()
+		blocks := []*hclEncodeInnerBlock{nil, {Label: "keep", Val: "v"}}
+		emitBlockField(f.Body(), "inner", reflect.ValueOf(blocks))
+		out := string(f.Bytes())
+		if !strings.Contains(out, `inner "keep"`) {
+			t.Errorf("expected surviving block, got:\n%s", out)
+		}
+		if got := strings.Count(out, "inner "); got != 1 {
+			t.Errorf("expected exactly 1 block, got %d:\n%s", got, out)
+		}
+	})
+
+	t.Run("plain struct field emits a block", func(t *testing.T) {
+		f := hclwrite.NewEmptyFile()
+		emitBlockField(f.Body(), "inner", reflect.ValueOf(hclEncodeInnerBlock{Label: "s", Val: "v"}))
+		out := string(f.Bytes())
+		if !strings.Contains(out, `inner "s"`) {
+			t.Errorf("expected struct block, got:\n%s", out)
+		}
+		if !strings.Contains(out, `val = "v"`) {
+			t.Errorf("expected block body attribute, got:\n%s", out)
+		}
+	})
+}
+
+func TestEmitOneBlockEdgeCases(t *testing.T) {
+	t.Run("nil pointer emits nothing", func(t *testing.T) {
+		f := hclwrite.NewEmptyFile()
+		emitOneBlock(f.Body(), "inner", reflect.ValueOf((*hclEncodeInnerBlock)(nil)))
+		if out := string(f.Bytes()); out != "" {
+			t.Errorf("expected empty output, got:\n%s", out)
+		}
+	})
+
+	t.Run("non-struct emits nothing", func(t *testing.T) {
+		f := hclwrite.NewEmptyFile()
+		emitOneBlock(f.Body(), "inner", reflect.ValueOf(42))
+		if out := string(f.Bytes()); out != "" {
+			t.Errorf("expected empty output, got:\n%s", out)
+		}
+	})
 }
 
 func TestRoundTripStableEncoding(t *testing.T) {

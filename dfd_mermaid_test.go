@@ -152,3 +152,66 @@ func TestDfdMermaidUnknownFlowEndpoint(t *testing.T) {
 		t.Errorf("expected error to mention the missing node, got: %s", err)
 	}
 }
+
+func TestDfdMermaidUnknownFlowSource(t *testing.T) {
+	dfd := brokenFlowDfd("ghost_src", "known")
+	out, err := dfd.GenerateMermaid("tm", DfdRenderOptions{})
+	if err == nil {
+		t.Fatalf("expected error for unknown flow source, got nil and output:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), `unknown source node "ghost_src"`) {
+		t.Errorf("expected error to mention the missing source node, got: %s", err)
+	}
+}
+
+func TestDfdMermaidUnlabeledFlows(t *testing.T) {
+	cases := []struct {
+		name     string
+		protocol string
+		style    ProtocolStyle
+	}{
+		{"no_name_no_protocol", "", ProtocolStyleLabel},
+		{"protocol_suppressed_by_none", "https", ProtocolStyleNone},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			dfd := unlabeledFlowDfd(tc.protocol)
+			out, err := dfd.GenerateMermaid("tm", DfdRenderOptions{ProtocolStyle: tc.style})
+			if err != nil {
+				t.Fatalf("GenerateMermaid: %s", err)
+			}
+			if !strings.Contains(out, "  n_a --> n_b\n") {
+				t.Errorf("expected bare `n_a --> n_b` edge in output:\n%s", out)
+			}
+			if strings.Contains(out, `-- "`) {
+				t.Errorf("did not expect a labeled edge in output:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestDfdMermaidDuplicateNodesSingleEmit(t *testing.T) {
+	dfd := sharedZoneDupDfd()
+	out, err := dfd.GenerateMermaid("tm", DfdRenderOptions{})
+	if err != nil {
+		t.Fatalf("GenerateMermaid: %s", err)
+	}
+
+	// Nodes declared both inside the trust_zone block and again at the top
+	// level must only be emitted once, inside the zone subgraph.
+	for _, node := range []string{
+		`n_proc_dup(("proc_dup"))`,
+		`n_ee_dup{"ee_dup"}`,
+		`n_data_dup[("data_dup")]`,
+		`n_proc_other(("proc_other"))`,
+	} {
+		if c := strings.Count(out, node); c != 1 {
+			t.Errorf("expected 1 occurrence of %s, got %d in:\n%s", node, c, out)
+		}
+	}
+	if c := strings.Count(out, `subgraph z_zone1 ["zone1"]`); c != 1 {
+		t.Errorf("expected 1 zone1 subgraph, got %d in:\n%s", c, out)
+	}
+}
