@@ -34,13 +34,19 @@ func (tm *Threatmodel) RenderOtm() (otm.OtmSchemaJson, error) {
 			attr["source"] = ia.Source
 		}
 
+		asset.Attributes = attr
+
 		o.Assets = append(o.Assets, asset)
 	}
 
 	for idx, t := range tm.Threats {
+		threatName := t.Name
+		if threatName == "" {
+			threatName = fmt.Sprintf("Threat %d", idx+1)
+		}
 		threat := otm.OtmSchemaJsonThreatsElem{
-			Name:        fmt.Sprintf("Threat %d", idx+1),
-			Id:          toKebabCase(fmt.Sprintf("Threat %d", idx+1)),
+			Name:        threatName,
+			Id:          toKebabCase(threatName),
 			Description: pToStr(t.Description),
 		}
 
