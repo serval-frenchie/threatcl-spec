@@ -435,7 +435,7 @@ func (tm *Threatmodel) validateInformationAssetRef(asset string) error {
 	return nil
 }
 
-func (tm *Threatmodel) shiftLegacyDfd() (int, error) {
+func (tm *Threatmodel) shiftLegacyDfd() int {
 	if tm.LegacyDfd != nil {
 		newDfd := &DataFlowDiagram{
 			Name:              "Legacy DFD",
@@ -450,9 +450,9 @@ func (tm *Threatmodel) shiftLegacyDfd() (int, error) {
 		tm.LegacyDfd = nil
 		tm.DataFlowDiagrams = append(tm.DataFlowDiagrams, newDfd)
 
-		return 1, nil
+		return 1
 	}
-	return 0, nil
+	return 0
 }
 
 func (tm *Threatmodel) ValidateTm(p *ThreatmodelParser) error {
