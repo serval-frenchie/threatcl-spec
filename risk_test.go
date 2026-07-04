@@ -305,6 +305,167 @@ func TestRiskMarkdownRender(t *testing.T) {
 	}
 }
 
+func TestRiskDefaultRiskModel(t *testing.T) {
+	m := DefaultRiskModel()
+	if m == nil {
+		t.Fatal("DefaultRiskModel() returned nil")
+	}
+	if m != defaultRiskModel {
+		t.Error("DefaultRiskModel() should return the built-in model")
+	}
+	if got := m.Ordinals[RiskLevelVeryHigh]; got != 5 {
+		t.Errorf("Ordinals[very_high] = %d, want 5", got)
+	}
+	if got := m.OtmValues[RiskLevelVeryLow]; got != 10 {
+		t.Errorf("OtmValues[very_low] = %d, want 10", got)
+	}
+	if got := m.Matrix[RiskLevelVeryHigh][RiskLevelVeryHigh]; got != SeverityCritical {
+		t.Errorf("Matrix[very_high][very_high] = %q, want %q", got, SeverityCritical)
+	}
+	if len(m.Thresholds) != 5 {
+		t.Errorf("len(Thresholds) = %d, want 5", len(m.Thresholds))
+	}
+}
+
+func TestRiskScoreUnknownLevels(t *testing.T) {
+	cases := []struct {
+		name       string
+		likelihood string
+		impact     string
+	}{
+		{"unknown likelihood", "bogus", RiskLevelMedium},
+		{"unknown impact", RiskLevelMedium, "bogus"},
+		{"both unknown", "bogus", "bogus"},
+		{"both empty", "", ""},
+	}
+	for _, tc := range cases {
+		if got := defaultRiskModel.score(tc.likelihood, tc.impact); got != 0 {
+			t.Errorf("%s: score(%q, %q) = %v, want 0", tc.name, tc.likelihood, tc.impact, got)
+		}
+	}
+}
+
+func TestRiskSeverityUnknownLevels(t *testing.T) {
+	// Unknown likelihood misses the matrix entirely.
+	if got := defaultRiskModel.severity("bogus", RiskLevelMedium); got != "" {
+		t.Errorf("severity(bogus, medium) = %q, want empty", got)
+	}
+	// Known likelihood but unknown impact misses the row.
+	if got := defaultRiskModel.severity(RiskLevelMedium, "bogus"); got != "" {
+		t.Errorf("severity(medium, bogus) = %q, want empty", got)
+	}
+	// Risk.Severity with unknown levels and no override falls through to "".
+	r := &Risk{Likelihood: "bogus", Impact: "bogus"}
+	if got := r.Severity(); got != "" {
+		t.Errorf("Severity() with unknown levels = %q, want empty", got)
+	}
+	if got := r.InherentScore(); got != 0 {
+		t.Errorf("InherentScore() with unknown levels = %v, want 0", got)
+	}
+}
+
+func TestRiskBandForScore(t *testing.T) {
+	cases := []struct {
+		score float64
+		want  string
+	}{
+		{100, SeverityCritical},
+		{75, SeverityCritical},
+		{74.9, SeverityHigh},
+		{50, SeverityHigh},
+		{25, SeverityMedium},
+		{10, SeverityLow},
+		{9.9, SeverityInfo},
+		{0, SeverityInfo},
+		// Below every threshold: the defensive fallback still yields info.
+		{-1, SeverityInfo},
+	}
+	for _, tc := range cases {
+		if got := defaultRiskModel.bandForScore(tc.score); got != tc.want {
+			t.Errorf("bandForScore(%v) = %q, want %q", tc.score, got, tc.want)
+		}
+	}
+}
+
+func TestRiskNilReceiver(t *testing.T) {
+	var r *Risk
+	if got := r.Severity(); got != "" {
+		t.Errorf("nil Risk Severity() = %q, want empty", got)
+	}
+	if got := r.InherentScore(); got != 0 {
+		t.Errorf("nil Risk InherentScore() = %v, want 0", got)
+	}
+}
+
+func TestRiskResidualScoreNoRiskBlock(t *testing.T) {
+	tr := &Threat{}
+	if got := tr.ResidualScore(); got != 0 {
+		t.Errorf("ResidualScore() with no risk = %v, want 0", got)
+	}
+	if got := tr.ResidualSeverity(); got != "" {
+		t.Errorf("ResidualSeverity() with no risk = %q, want empty", got)
+	}
+}
+
+func TestRiskResidualFactorEdgeCases(t *testing.T) {
+	risk := &Risk{Likelihood: RiskLevelMedium, Impact: RiskLevelMedium} // inherent 25
+
+	t.Run("nil and non-positive controls are skipped", func(t *testing.T) {
+		tr := &Threat{
+			Risk: risk,
+			Controls: []*Control{
+				nil,
+				{Name: "zero", Implemented: true, RiskReduction: 0},
+				{Name: "negative", Implemented: true, RiskReduction: -20},
+			},
+		}
+		if got := tr.ResidualScore(); got != 25.0 {
+			t.Errorf("residual score = %v, want inherent 25", got)
+		}
+		if got := tr.ResidualRiskReduction(); got != 0.0 {
+			t.Errorf("residual reduction = %v, want 0", got)
+		}
+	})
+
+	t.Run("reduction above 100 is clamped", func(t *testing.T) {
+		tr := &Threat{
+			Risk: risk,
+			Controls: []*Control{
+				{Name: "over", Implemented: true, RiskReduction: 150},
+			},
+		}
+		if got := tr.ResidualScore(); got != 0.0 {
+			t.Errorf("residual score = %v, want 0 (clamped to 100%%)", got)
+		}
+		if got := tr.ResidualRiskReduction(); got != 100.0 {
+			t.Errorf("residual reduction = %v, want 100", got)
+		}
+	})
+}
+
+func TestRiskCanonicalToken(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"Very High", "very_high"},
+		{"very-high", "very_high"},
+		{"VERY_HIGH", "very_high"},
+		{"  medium  ", "medium"},
+		// Repeated separators collapse to a single underscore.
+		{"very  high", "very_high"},
+		{"very - high", "very_high"},
+		{"very__high", "very_high"},
+		{"very -  - high", "very_high"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := canonicalRiskToken(tc.in); got != tc.want {
+			t.Errorf("canonicalRiskToken(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestRiskHCLRoundTrip(t *testing.T) {
 	p := parseRaw(t, riskTM(`    risk {
       likelihood = "high"

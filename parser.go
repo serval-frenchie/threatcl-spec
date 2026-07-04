@@ -101,12 +101,7 @@ func (p *ThreatmodelParser) validateTms() error {
 
 	newWrapped := []Threatmodel{}
 	for _, t := range p.wrapped.Threatmodels {
-		_, err := t.shiftLegacyDfd()
-		if err != nil {
-			errMap = multierror.Append(errMap, fmt.Errorf(
-				"TM '%s': error shifting legacy DFD: %s", t.Name, err))
-		}
-		// fmt.Printf("We did a shift: %d\n", shiftedCount)
+		t.shiftLegacyDfd()
 		newWrapped = append(newWrapped, t)
 	}
 
@@ -225,7 +220,7 @@ func extractVars(f *hcl.File) (map[string]string, error) {
 
 }
 
-func (p *ThreatmodelParser) buildVarCtx(ctx *hcl.EvalContext, varMap map[string]string) error {
+func (p *ThreatmodelParser) buildVarCtx(ctx *hcl.EvalContext, varMap map[string]string) {
 
 	// var varMapOut map[string]cty.Value
 	varMapOut := make(map[string]cty.Value)
@@ -235,8 +230,6 @@ func (p *ThreatmodelParser) buildVarCtx(ctx *hcl.EvalContext, varMap map[string]
 	}
 
 	ctx.Variables["var"] = cty.ObjectVal(varMapOut)
-
-	return nil
 
 }
 
@@ -411,12 +404,7 @@ func (p *ThreatmodelParser) parseHCL(f *hcl.File, filename string, isChild bool)
 		}
 
 		if len(varMap) > 0 {
-
-			err = p.buildVarCtx(ctx, varMap)
-
-			if err != nil {
-				return err
-			}
+			p.buildVarCtx(ctx, varMap)
 		}
 	}
 

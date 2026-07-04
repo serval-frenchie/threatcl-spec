@@ -1,0 +1,11 @@
+spec_version = "0.1.17"
+
+threatmodel "constraintcov clean" {
+  description = "Threat model that trips no deprecation constraints"
+  author = "@xntrik"
+
+  threat "plain_threat" {
+    description = "A threat with no deprecated blocks or attributes"
+    impacts = ["Confidentiality"]
+  }
+}
