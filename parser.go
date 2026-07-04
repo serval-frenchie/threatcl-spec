@@ -107,6 +107,8 @@ func (p *ThreatmodelParser) validateTms() error {
 
 	p.wrapped.Threatmodels = newWrapped
 
+	tmIds := make(map[string]interface{})
+
 	for _, t := range p.wrapped.Threatmodels {
 		// Validating unique threatmodel name
 		if _, ok := tmMap[t.Name]; ok {
@@ -116,6 +118,28 @@ func (p *ThreatmodelParser) validateTms() error {
 			))
 		}
 		tmMap[t.Name] = nil
+
+		// Validating declared ids: identifier-safe and unique. Derived
+		// identifiers (see Identifier()) are deliberately not checked here -
+		// enforcing uniqueness on derivations would invalidate existing
+		// models whose names happen to collide once slugified.
+		if t.Id != "" {
+			if !ValidIdentifier(t.Id) {
+				errMap = multierror.Append(errMap, fmt.Errorf(
+					"TM '%s': invalid id '%s' - must be lowercase letters, digits or underscores, starting with a letter",
+					t.Name,
+					t.Id,
+				))
+			}
+			if _, ok := tmIds[t.Id]; ok {
+				errMap = multierror.Append(errMap, fmt.Errorf(
+					"TM '%s': duplicate id '%s'",
+					t.Name,
+					t.Id,
+				))
+			}
+			tmIds[t.Id] = nil
+		}
 
 		// err := p.ValidateTm(&t)
 		err := t.ValidateTm(p)

@@ -161,7 +161,12 @@ type DataFlowDiagram struct {
 }
 
 type Threatmodel struct {
-	Name                   string                  `json:"name" hcl:"name,label"`
+	Name string `json:"name" hcl:"name,label"`
+	// Id is an optional stable, identifier-safe handle for the threat model
+	// (^[a-z][a-z0-9_]*$, unique within a parsed set). Unlike Name — an
+	// arbitrary display string — a declared id survives renames and can be
+	// used in dotted references by tooling. See Identifier().
+	Id                     string                  `json:"id,omitempty" hcl:"id,optional"`
 	Description            string                  `json:"description,omitempty" hcl:"description,optional"`
 	Imports                []string                `json:"-" hcl:"imports,optional"`
 	Including              string                  `json:"including,omitempty" hcl:"including,optional"`

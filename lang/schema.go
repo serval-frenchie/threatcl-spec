@@ -118,6 +118,7 @@ func threatmodelBlock(cfg *spec.ThreatmodelSpecConfig) BlockSchema {
 		Body: BodySchema{
 			Attrs: []AttrSchema{
 				{Name: "author", Required: true, Type: "string", Doc: "Who authored this threat model."},
+				{Name: "id", Type: "string", Doc: "Optional stable identifier-safe handle (lowercase letters, digits, underscores; starts with a letter; unique). Unlike the name, it survives renames and can be used in dotted references by tooling."},
 				{Name: "description", Type: "string", Doc: "Free-text description of the system being modelled."},
 				{Name: "link", Type: "string", Doc: "A URL with more detail about this system."},
 				{Name: "diagram_link", Type: "string", Doc: "A URL to an externally-hosted diagram."},

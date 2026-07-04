@@ -14,6 +14,18 @@ SECURITY:
   loopback and link-local addresses (e.g. the `169.254.169.254` cloud metadata
   endpoint).
 
+CHANGES:
+
+* `threatmodel` blocks support an optional `id` attribute: a stable,
+  identifier-safe handle (`^[a-z][a-z0-9_]*$`, unique within a parsed set)
+  that survives renames and lets tooling offer dotted references such as
+  `threatmodel.tower_of_london` (threat model names are arbitrary strings, so
+  they can't appear in dotted HCL traversals). New API:
+  `Threatmodel.Identifier()` returns the declared id or one derived from the
+  name; `DeriveIdentifier` exposes the name→identifier derivation (shared
+  with OTM export ids); `ValidIdentifier` reports whether a string is
+  acceptable as a declared id.
+
 ## 0.4.0
 
 ### June 27, 2026
