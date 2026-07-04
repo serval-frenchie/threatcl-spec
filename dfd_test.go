@@ -205,6 +205,187 @@ func parallelFlowsDfdTm() *Threatmodel {
 	}
 }
 
+// brokenFlowDfd returns a diagram whose single flow references the given
+// endpoints; using an undeclared name for either end exercises the error
+// propagation paths of the render entrypoints.
+func brokenFlowDfd(from, to string) *DataFlowDiagram {
+	return &DataFlowDiagram{
+		Name: "broken",
+		Processes: []*DfdProcess{
+			{Name: "known"},
+		},
+		Flows: []*DfdFlow{
+			{Name: "flow", From: from, To: to},
+		},
+	}
+}
+
+// unlabeledFlowDfd returns a diagram whose single flow has no name, so the
+// rendered edge label depends entirely on the protocol and style.
+func unlabeledFlowDfd(protocol string) *DataFlowDiagram {
+	return &DataFlowDiagram{
+		Name: "unlabeled",
+		Processes: []*DfdProcess{
+			{Name: "a"},
+			{Name: "b"},
+		},
+		Flows: []*DfdFlow{
+			{From: "a", To: "b", Protocol: protocol},
+		},
+	}
+}
+
+// sharedZoneDupDfd returns a diagram where each node kind is declared twice
+// under the same name (once inside a trust_zone block, once at the top level
+// with a trust_zone attribute) and multiple attribute-assigned nodes share a
+// zone. Exercises the node dedup branches and the zone-cache-hit branch.
+func sharedZoneDupDfd() *DataFlowDiagram {
+	return &DataFlowDiagram{
+		Name: "dups",
+		TrustZones: []*DfdTrustZone{
+			{
+				Name:             "zone1",
+				Processes:        []*DfdProcess{{Name: "proc_dup"}},
+				ExternalElements: []*DfdExternal{{Name: "ee_dup"}},
+				DataStores:       []*DfdData{{Name: "data_dup"}},
+			},
+		},
+		Processes: []*DfdProcess{
+			{Name: "proc_dup", TrustZone: "zone1"},
+			{Name: "proc_other", TrustZone: "zone1"},
+		},
+		ExternalElements: []*DfdExternal{
+			{Name: "ee_dup", TrustZone: "zone1"},
+		},
+		DataStores: []*DfdData{
+			{Name: "data_dup", TrustZone: "zone1"},
+		},
+	}
+}
+
+func TestDfdFlowLabelVariants(t *testing.T) {
+	cases := []struct {
+		name  string
+		flow  *DfdFlow
+		style ProtocolStyle
+		want  string
+	}{
+		{
+			"name_and_protocol",
+			&DfdFlow{Name: "login", Protocol: "https"},
+			ProtocolStyleLabel,
+			"login (https)",
+		},
+		{
+			"name_only",
+			&DfdFlow{Name: "login"},
+			ProtocolStyleLabel,
+			"login",
+		},
+		{
+			"protocol_only",
+			&DfdFlow{Protocol: "https"},
+			ProtocolStyleLabel,
+			"(https)",
+		},
+		{
+			"protocol_suppressed_by_none",
+			&DfdFlow{Protocol: "https"},
+			ProtocolStyleNone,
+			"",
+		},
+		{
+			"protocol_suppressed_by_color",
+			&DfdFlow{Protocol: "https"},
+			ProtocolStyleColor,
+			"",
+		},
+		{
+			"empty_flow",
+			&DfdFlow{},
+			ProtocolStyleBoth,
+			"",
+		},
+		{
+			"whitespace_name_and_protocol",
+			&DfdFlow{Name: "   ", Protocol: " https "},
+			ProtocolStyleBoth,
+			"(https)",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flowLabel(tc.flow, tc.style); got != tc.want {
+				t.Errorf("flowLabel() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDfdDotUnknownFlowEndpoints(t *testing.T) {
+	cases := []struct {
+		name string
+		from string
+		to   string
+		exp  string
+	}{
+		{
+			"unknown_source",
+			"ghost_src",
+			"known",
+			`unknown source node "ghost_src"`,
+		},
+		{
+			"unknown_destination",
+			"known",
+			"ghost_dst",
+			`unknown destination node "ghost_dst"`,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			dfd := brokenFlowDfd(tc.from, tc.to)
+			out, err := dfd.GenerateDot("tm", DfdRenderOptions{})
+			if err == nil {
+				t.Fatalf("expected error for unknown flow endpoint, got nil and output:\n%s", out)
+			}
+			if !strings.Contains(err.Error(), tc.exp) {
+				t.Errorf("expected error to contain %q, got: %s", tc.exp, err)
+			}
+			if out != "" {
+				t.Errorf("expected empty output on error, got:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestDfdDotSharedZoneAndDuplicateNodes(t *testing.T) {
+	dfd := sharedZoneDupDfd()
+
+	dotSrc, err := dfd.GenerateDot("tm", DfdRenderOptions{})
+	if err != nil {
+		t.Fatalf("GenerateDot: %s", err)
+	}
+
+	// Each duplicated node must be emitted exactly once, and the shared zone
+	// must produce a single cluster even though four nodes reference it.
+	for _, label := range []string{
+		`label="proc_dup"`,
+		`label="ee_dup"`,
+		`label="data_dup"`,
+		`label="proc_other"`,
+		`label="zone1"`,
+	} {
+		if c := strings.Count(dotSrc, label); c != 1 {
+			t.Errorf("expected 1 occurrence of %s, got %d in:\n%s", label, c, dotSrc)
+		}
+	}
+}
+
 func TestDfdDotParallelFlows(t *testing.T) {
 	tm := parallelFlowsDfdTm()
 	dfd := tm.DataFlowDiagrams[0]
