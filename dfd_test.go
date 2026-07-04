@@ -233,9 +233,9 @@ func TestDfdDotProtocolStyles(t *testing.T) {
 	const httpsColor = "#56B4E9"
 
 	cases := []struct {
-		name     string
-		style    ProtocolStyle
-		expect   []string
+		name      string
+		style     ProtocolStyle
+		expect    []string
 		notExpect []string
 	}{
 		{
