@@ -2,6 +2,9 @@ package spec
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	version "github.com/hashicorp/go-version"
 )
@@ -102,20 +105,37 @@ func (c *multiDfd) tmCheck(tm *Threatmodel) bool {
 	return false
 }
 
+// VersionConstraints checks all threat models in tmw against all known
+// constraints, and returns the matching warnings joined by newlines. If emit
+// is true, warnings are also printed to stdout. New callers should prefer
+// VersionConstraintsToWriter and control the output themselves.
 func VersionConstraints(tmw *ThreatmodelWrapped, emit bool) (string, error) {
-	hcltmConstraints := make(map[string]hcltmConstraint)
-	hcltmConstraints["control_string_to_block"] = &controlStringToBlock{}
-	hcltmConstraints["proposed_control_to_block"] = &proposedControlToBlock{}
-	hcltmConstraints["expanded_control_to_control"] = &expandedControlToControl{}
-	hcltmConstraints["multi_dfd"] = &multiDfd{}
+	out := io.Discard
+	if emit {
+		out = os.Stdout
+	}
+	return VersionConstraintsToWriter(tmw, out)
+}
 
+// VersionConstraintsToWriter checks all threat models in tmw against all
+// known constraints, in a fixed order, writing each matching warning to w as
+// a newline-terminated line. It returns the same warnings joined by newlines.
+func VersionConstraintsToWriter(tmw *ThreatmodelWrapped, w io.Writer) (string, error) {
+	hcltmConstraints := []hcltmConstraint{
+		&controlStringToBlock{},
+		&proposedControlToBlock{},
+		&expandedControlToControl{},
+		&multiDfd{},
+	}
+
+	currVer, err := version.NewVersion(tmw.SpecVersion)
+	if err != nil {
+		return "", err
+	}
+
+	warnings := []string{}
 	for _, cval := range hcltmConstraints {
 		newConst, err := version.NewConstraint(cval.verConstraint())
-		if err != nil {
-			return "", err
-		}
-
-		currVer, err := version.NewVersion(tmw.SpecVersion)
 		if err != nil {
 			return "", err
 		}
@@ -123,15 +143,14 @@ func VersionConstraints(tmw *ThreatmodelWrapped, emit bool) (string, error) {
 		if newConst.Check(currVer) {
 			for _, tm := range tmw.Threatmodels {
 				if cval.tmCheck(&tm) {
-					if emit {
-						fmt.Printf("[threatmodel: %s] %s\n", tm.Name, cval.msg())
-					}
-					return fmt.Sprintf("[threatmodel: %s] %s", tm.Name, cval.msg()), nil
+					warning := fmt.Sprintf("[threatmodel: %s] %s", tm.Name, cval.msg())
+					fmt.Fprintf(w, "%s\n", warning)
+					warnings = append(warnings, warning)
 				}
 			}
 		}
 	}
 
-	return "", nil
+	return strings.Join(warnings, "\n"), nil
 
 }
