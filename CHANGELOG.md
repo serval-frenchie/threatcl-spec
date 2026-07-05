@@ -3,7 +3,7 @@
 CHANGES:
 
 * `threatmodel` blocks support an optional `id` attribute: a stable,
-  identifier-safe handle (`^[a-z][a-z0-9_]*$`, unique within a parsed set)
+  identifier-safe handle (`^[a-z][a-z0-9_]*$`, unique within a parsed file)
   that survives renames and lets tooling offer dotted references such as
   `threatmodel.tower_of_london` (threat model names are arbitrary strings, so
   they can't appear in dotted HCL traversals). New API:
@@ -11,6 +11,15 @@ CHANGES:
   name; `DeriveIdentifier` exposes the name→identifier derivation (shared
   with OTM export ids); `ValidIdentifier` reports whether a string is
   acceptable as a declared id.
+* Threat model id validation covers the gaps left by the initial `id`
+  support: an explicit `id = ""` is now a parse error instead of silently
+  behaving as unset (in both HCL and JSON), and `AddTMAndWrite` validates the
+  incoming model's declared id (format, and uniqueness against the models it
+  already holds) before appending. A new `ValidateUniqueIdentifiers` helper
+  checks a slice of threat models — e.g. aggregated across multiple parsed
+  files, which parse-time validation never sees together — for
+  identifier-safe declared ids and collision-free effective `Identifier()`
+  values (declared and derived), for consumers building reference registries.
 * Element references now accept identifier-safe slugs alongside exact names.
   Anywhere a threat model refers to another element by name — DFD `flow`
   `from`/`to`, `data_store` `information_asset` links, threat
