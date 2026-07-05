@@ -168,28 +168,52 @@ threatmodel "The VPC" {
 			"",
 		},
 		{
-			"id_is_anothers_namespace",
-			`threatmodel "Apps Portfolio" {
-  id     = "apps"
+			"parent_model_with_children",
+			`threatmodel "Buildings" {
+  id     = "buildings"
   author = "@xntrik"
 }
 threatmodel "Tower of London" {
-  id     = "apps.tower"
-  author = "@xntrik"
-}`,
-			"id 'apps' is the namespace of id 'apps.tower'",
-		},
-		{
-			"namespace_collision_order_independent",
-			`threatmodel "Tower of London" {
-  id     = "apps.tower"
+  id     = "buildings.tower"
   author = "@xntrik"
 }
-threatmodel "Apps Portfolio" {
-  id     = "apps"
+threatmodel "London Bridge" {
+  id     = "buildings.bridge"
   author = "@xntrik"
 }`,
-			"id 'apps' is the namespace of id 'apps.tower'",
+			"",
+		},
+		{
+			"reserved_segment_under_parent_model",
+			`threatmodel "Buildings" {
+  id     = "buildings"
+  author = "@xntrik"
+}
+threatmodel "Tower of London" {
+  id     = "buildings.threats"
+  author = "@xntrik"
+}`,
+			"id 'buildings.threats' uses reserved segment 'threats'",
+		},
+		{
+			"reserved_segment_order_independent",
+			`threatmodel "Tower of London" {
+  id     = "buildings.author"
+  author = "@xntrik"
+}
+threatmodel "Buildings" {
+  id     = "buildings"
+  author = "@xntrik"
+}`,
+			"id 'buildings.author' uses reserved segment 'author'",
+		},
+		{
+			"reserved_segment_without_parent_model_ok",
+			`threatmodel "Tower of London" {
+  id     = "buildings.threats.tower"
+  author = "@xntrik"
+}`,
+			"",
 		},
 	}
 

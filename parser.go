@@ -149,25 +149,41 @@ func (p *ThreatmodelParser) validateTms() error {
 
 	}
 
-	// A declared id may not sit at another declared id's namespace: with ids
-	// "apps" and "apps.tower", "apps" would have to be both a model and a
-	// container in a reference tree. Second pass so ordering in the file
-	// doesn't matter.
+	// A model may sit at another model's namespace — id "buildings" with
+	// children "buildings.tower", "buildings.bridge" — since reference trees
+	// place children alongside the parent model's fields. That coexistence is
+	// exactly why a child's segment directly beneath a parent model's id
+	// can't be a threat model field name: "buildings.threats" would shadow
+	// the parent's threats. Second pass so ordering in the file doesn't
+	// matter.
 	for _, t := range p.wrapped.Threatmodels {
 		if t.Id == "" {
 			continue
 		}
 		for _, prefix := range IdentifierPrefixes(t.Id) {
-			if otherName, ok := tmIds[prefix]; ok {
+			if _, ok := tmIds[prefix]; !ok {
+				continue
+			}
+			segment := t.Id[len(prefix)+1:]
+			if dot := strings.Index(segment, "."); dot >= 0 {
+				segment = segment[:dot]
+			}
+			if ReservedIdSegment(segment) {
 				errMap = multierror.Append(errMap, fmt.Errorf(
-					"TM '%s': id '%s' is the namespace of id '%s' (TM '%s') - an id can't be both a model and a namespace",
-					otherName,
-					prefix,
-					t.Id,
+					"TM '%s': id '%s' uses reserved segment '%s' directly beneath model id '%s' (TM '%s') - it would shadow that threat model's '%s' field in references",
 					t.Name,
+					t.Id,
+					segment,
+					prefix,
+					tmIds[prefix],
+					segment,
 				))
 			}
 		}
+	}
+
+	if err := p.resolveExtends(); err != nil {
+		errMap = multierror.Append(errMap, err)
 	}
 
 	if errMap != nil {

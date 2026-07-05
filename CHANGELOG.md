@@ -16,18 +16,23 @@ SECURITY:
 
 CHANGES:
 
-* `threatmodel` blocks support an optional `id` attribute: a stable,
-  identifier-safe handle that survives renames and lets tooling offer dotted
-  references such as `threatmodel.tower_of_london` (threat model names are
-  arbitrary strings, so they can't appear in dotted HCL traversals). Ids are
-  dot-separated identifier segments, so they can also namespace models into a
-  hierarchy — `apps.tower`, `apps.bridge`, `infra.network.vpc` — with
-  parse-time validation that ids are unique and that no id doubles as another
-  id's namespace. New API: `Threatmodel.Identifier()` returns the declared id
-  or one derived from the name; `DeriveIdentifier` exposes the
-  name→identifier derivation (shared with OTM export ids); `ValidIdentifier`
-  reports whether a string is acceptable as a declared id;
-  `IdentifierPrefixes` returns a dotted id's namespace prefixes.
+* `threatmodel` ids can be dot-separated identifier segments, namespacing
+  models into a hierarchy — `buildings.tower`, `buildings.bridge`,
+  `infra.network.vpc`. A model may sit at the namespace itself (`buildings`)
+  as the parent of its nested children; the only constraint is that a segment
+  directly beneath a parent model's id can't be a threat model field name
+  (`buildings.threats` would shadow that model's threats in references). New
+  API: `IdentifierPrefixes` returns a dotted id's namespace prefixes,
+  `ReservedIdSegment` reports segments that can't sit directly beneath a
+  parent model.
+* `threatmodel` blocks support an optional `extends` attribute naming another
+  model's declared id in the same parsed set. The extending model inherits
+  the parent's threats, information assets, use cases, exclusions and
+  third-party dependencies (same-named items in the child win) and its
+  `attributes` block when the child declares none — the same union-merge
+  semantics as `including`, applied by id. Chains resolve parent-first;
+  cycles and unknown targets are parse errors. Scalars, DFDs and mermaid
+  diagrams deliberately stay per-model.
 
 ## 0.4.0
 
