@@ -45,8 +45,8 @@ func TestKebab(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if tc.exp != toKebabCase(tc.in) {
-				t.Errorf("'%s' should have been converted to '%s' but ended up being '%s'", tc.in, tc.exp, toKebabCase(tc.in))
+			if tc.exp != Slugify(tc.in) {
+				t.Errorf("'%s' should have been converted to '%s' but ended up being '%s'", tc.in, tc.exp, Slugify(tc.in))
 			}
 		})
 	}
@@ -81,8 +81,8 @@ func TestKebabUnder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if tc.exp != toKebabUnder(tc.in) {
-				t.Errorf("'%s' should have been converted to '%s' but ended up being '%s'", tc.in, tc.exp, toKebabUnder(tc.in))
+			if tc.exp != SlugifyUnderscore(tc.in) {
+				t.Errorf("'%s' should have been converted to '%s' but ended up being '%s'", tc.in, tc.exp, SlugifyUnderscore(tc.in))
 			}
 		})
 	}

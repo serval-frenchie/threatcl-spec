@@ -59,13 +59,13 @@ func IdentifierPrefixes(id string) []string {
 }
 
 // DeriveIdentifier converts a display name to identifier form:
-// "Tower of London" → "tower_of_london". It shares its derivation with the
-// OTM exporter's ids (which use dashes instead of underscores). The result is
-// not guaranteed to satisfy ValidIdentifier — a name like "3rd Party Gateway"
-// derives to a digit-leading token — so consumers offering dotted references
-// should check.
+// "Tower of London" → "tower_of_london". It is SlugifyUnderscore, which
+// shares its derivation with the OTM exporter's ids (those use dashes
+// instead of underscores). The result is not guaranteed to satisfy
+// ValidIdentifier — a name like "3rd Party Gateway" derives to a
+// digit-leading token — so consumers offering dotted references should check.
 func DeriveIdentifier(name string) string {
-	return toKebabUnder(name)
+	return SlugifyUnderscore(name)
 }
 
 // Identifier returns the threat model's addressable identity: the declared
