@@ -432,6 +432,11 @@ func (p *ThreatmodelParser) parseHCL(f *hcl.File, filename string, isChild bool)
 		}
 	}
 
+	// Element labels are file-local, so the dot-notation reference namespaces
+	// (process.<slug>, information_asset.<slug>, ...) are built for child
+	// files too.
+	p.buildRefCtx(ctx, extractRefSlugs(f))
+
 	// var diags hcl.Diagnostics
 
 	diags := gohcl.DecodeBody(f.Body, ctx, p.wrapped)

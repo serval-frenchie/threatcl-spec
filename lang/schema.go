@@ -220,7 +220,7 @@ func threatBlock(cfg *spec.ThreatmodelSpecConfig) BlockSchema {
 				{Name: "description", Required: true, Type: "string", Doc: "Description of the threat."},
 				{Name: "impacts", Type: "list(string)", EnumValues: cfg.ImpactTypes, Doc: "Which security properties this threat impacts."},
 				{Name: "stride", Type: "list(string)", EnumValues: cfg.STRIDE, Doc: "STRIDE categories this threat falls under."},
-				{Name: "information_asset_refs", Type: "list(string)", Doc: "Names of information_assets this threat affects."},
+				{Name: "information_asset_refs", Type: "list(string)", Doc: "information_assets this threat affects, by name, slug, or information_asset.<slug> reference."},
 				{Name: "control_imports", Type: "list(string)", Doc: "References to imported controls (import.control.NAME)."},
 				{Name: "control", Type: "string", Doc: "Deprecated free-text control. Prefer a control block."},
 				{Name: "ref", Type: "string", Doc: "An external reference id for this threat."},
@@ -312,8 +312,8 @@ func dfdBlock(typeName string, labels []string, doc string, repeatable bool) Blo
 					Doc:        "A data flow between two elements.",
 					Repeatable: true,
 					Body: BodySchema{Attrs: []AttrSchema{
-						{Name: "from", Required: true, Type: "string", Doc: "Name of the source element."},
-						{Name: "to", Required: true, Type: "string", Doc: "Name of the destination element."},
+						{Name: "from", Required: true, Type: "string", Doc: "Source element: its name, its slug, or a dot-notation reference (e.g. process.web_app)."},
+						{Name: "to", Required: true, Type: "string", Doc: "Destination element: its name, its slug, or a dot-notation reference (e.g. data_store.user_database)."},
 						{Name: "protocol", Type: "string", Doc: "Protocol used for the flow."},
 					}},
 				},
@@ -339,7 +339,7 @@ func dfdElementBlocks() []BlockSchema {
 			Doc:        "A process element.",
 			Repeatable: true,
 			Body: BodySchema{Attrs: []AttrSchema{
-				{Name: "trust_zone", Type: "string", Doc: "Trust zone this element belongs to."},
+				{Name: "trust_zone", Type: "string", Doc: "Trust zone this element belongs to (name, slug, or trust_zone.<slug> reference)."},
 			}},
 		},
 		{
@@ -348,7 +348,7 @@ func dfdElementBlocks() []BlockSchema {
 			Doc:        "An external entity.",
 			Repeatable: true,
 			Body: BodySchema{Attrs: []AttrSchema{
-				{Name: "trust_zone", Type: "string", Doc: "Trust zone this element belongs to."},
+				{Name: "trust_zone", Type: "string", Doc: "Trust zone this element belongs to (name, slug, or trust_zone.<slug> reference)."},
 			}},
 		},
 		{
@@ -357,8 +357,8 @@ func dfdElementBlocks() []BlockSchema {
 			Doc:        "A data store element.",
 			Repeatable: true,
 			Body: BodySchema{Attrs: []AttrSchema{
-				{Name: "trust_zone", Type: "string", Doc: "Trust zone this element belongs to."},
-				{Name: "information_asset", Type: "string", Doc: "Name of a linked information_asset."},
+				{Name: "trust_zone", Type: "string", Doc: "Trust zone this element belongs to (name, slug, or trust_zone.<slug> reference)."},
+				{Name: "information_asset", Type: "string", Doc: "A linked information_asset: its name, slug, or information_asset.<slug> reference."},
 			}},
 		},
 	}

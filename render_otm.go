@@ -2,8 +2,6 @@ package spec
 
 import (
 	"fmt"
-	"strings"
-	"unicode"
 
 	"github.com/threatcl/go-otm/pkg/otm"
 )
@@ -13,7 +11,7 @@ func (tm *Threatmodel) RenderOtm() (otm.OtmSchemaJson, error) {
 	o.OtmVersion = OtmVersion
 
 	o.Project.Name = tm.Name
-	o.Project.Id = toKebabCase(tm.Name)
+	o.Project.Id = Slugify(tm.Name)
 	o.Project.Description = pToStr(tm.Description)
 	o.Project.Owner = pToStr(tm.Author)
 	o.Project.Attributes = tm.getAttributes()
@@ -21,7 +19,7 @@ func (tm *Threatmodel) RenderOtm() (otm.OtmSchemaJson, error) {
 	for _, ia := range tm.InformationAssets {
 		asset := otm.OtmSchemaJsonAssetsElem{
 			Name:        ia.Name,
-			Id:          toKebabCase(ia.Name),
+			Id:          Slugify(ia.Name),
 			Description: pToStr(ia.Description),
 		}
 
@@ -46,7 +44,7 @@ func (tm *Threatmodel) RenderOtm() (otm.OtmSchemaJson, error) {
 		}
 		threat := otm.OtmSchemaJsonThreatsElem{
 			Name:        threatName,
-			Id:          toKebabCase(threatName),
+			Id:          Slugify(threatName),
 			Description: pToStr(t.Description),
 		}
 
@@ -91,7 +89,7 @@ func (tm *Threatmodel) RenderOtm() (otm.OtmSchemaJson, error) {
 
 			mitigation := otm.OtmSchemaJsonMitigationsElem{
 				Name:          control.Name,
-				Id:            toKebabCase(control.Name),
+				Id:            Slugify(control.Name),
 				Description:   pToStr(control.Description),
 				RiskReduction: float64(control.RiskReduction),
 			}
@@ -99,7 +97,7 @@ func (tm *Threatmodel) RenderOtm() (otm.OtmSchemaJson, error) {
 			attr := make(map[string]interface{})
 
 			for _, atrVal := range control.Attributes {
-				attr[toKebabUnder(atrVal.Name)] = atrVal.Value
+				attr[SlugifyUnderscore(atrVal.Name)] = atrVal.Value
 			}
 
 			attr["implemented"] = control.Implemented
@@ -143,7 +141,7 @@ func (tm *Threatmodel) getAttributes() map[string]interface{} {
 	}
 
 	for _, atrVal := range tm.AdditionalAttributes {
-		attr[toKebabUnder(atrVal.Name)] = atrVal.Value
+		attr[SlugifyUnderscore(atrVal.Name)] = atrVal.Value
 	}
 
 	return attr
@@ -155,42 +153,4 @@ func pToStr(s string) *string {
 
 func pFloat(f float64) *float64 {
 	return &f
-}
-
-func toKebabCase(s string) string {
-	return toKebabCaseInner(s, '-')
-}
-
-func toKebabUnder(s string) string {
-	return toKebabCaseInner(s, '_')
-}
-
-func toKebabCaseInner(s string, divider rune) string {
-	var kebab strings.Builder
-	var prevDash bool // Track whether the previous character was a dash to avoid consecutive dashes
-
-	for i, r := range s {
-		// Check if the character is alphanumeric (letter or number)
-		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			// Convert uppercase to lowercase and add a hyphen if this is not the start and the previous character wasn't a dash
-			if unicode.IsUpper(r) && i > 0 && !prevDash {
-				kebab.WriteRune(divider)
-				prevDash = true
-			}
-			kebab.WriteRune(unicode.ToLower(r))
-			prevDash = false // Reset the dash tracker
-		} else if i > 0 && !prevDash && kebab.Len() > 0 { // For non-alphanumeric characters, potentially add a dash if one hasn't been added
-			kebab.WriteRune(divider)
-			prevDash = true // Mark that a dash was added
-			continue
-		}
-	}
-
-	// Remove trailing dash if present
-	kebabStr := kebab.String()
-	if strings.HasSuffix(kebabStr, string(divider)) {
-		kebabStr = kebabStr[:len(kebabStr)-1]
-	}
-
-	return kebabStr
 }
