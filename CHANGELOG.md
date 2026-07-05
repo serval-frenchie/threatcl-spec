@@ -17,14 +17,17 @@ SECURITY:
 CHANGES:
 
 * `threatmodel` blocks support an optional `id` attribute: a stable,
-  identifier-safe handle (`^[a-z][a-z0-9_]*$`, unique within a parsed set)
-  that survives renames and lets tooling offer dotted references such as
-  `threatmodel.tower_of_london` (threat model names are arbitrary strings, so
-  they can't appear in dotted HCL traversals). New API:
-  `Threatmodel.Identifier()` returns the declared id or one derived from the
-  name; `DeriveIdentifier` exposes the name→identifier derivation (shared
-  with OTM export ids); `ValidIdentifier` reports whether a string is
-  acceptable as a declared id.
+  identifier-safe handle that survives renames and lets tooling offer dotted
+  references such as `threatmodel.tower_of_london` (threat model names are
+  arbitrary strings, so they can't appear in dotted HCL traversals). Ids are
+  dot-separated identifier segments, so they can also namespace models into a
+  hierarchy — `apps.tower`, `apps.bridge`, `infra.network.vpc` — with
+  parse-time validation that ids are unique and that no id doubles as another
+  id's namespace. New API: `Threatmodel.Identifier()` returns the declared id
+  or one derived from the name; `DeriveIdentifier` exposes the
+  name→identifier derivation (shared with OTM export ids); `ValidIdentifier`
+  reports whether a string is acceptable as a declared id;
+  `IdentifierPrefixes` returns a dotted id's namespace prefixes.
 
 ## 0.4.0
 

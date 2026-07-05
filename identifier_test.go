@@ -13,12 +13,19 @@ func TestValidIdentifier(t *testing.T) {
 		{"tower_of_london", true},
 		{"a", true},
 		{"tm2_one", true},
+		{"apps.tower", true},
+		{"apps.web.frontend", true},
 		{"", false},
 		{"Tower_of_London", false},
 		{"tower-of-london", false},
 		{"3rd_party", false},
 		{"_leading", false},
 		{"has space", false},
+		{".apps", false},
+		{"apps.", false},
+		{"apps..tower", false},
+		{"apps.3rd", false},
+		{"apps.Tower", false},
 	}
 
 	for _, tc := range cases {
@@ -41,6 +48,31 @@ func TestDeriveIdentifier(t *testing.T) {
 	for _, tc := range cases {
 		if got := DeriveIdentifier(tc.in); got != tc.exp {
 			t.Errorf("DeriveIdentifier(%q) = %q, expected %q", tc.in, got, tc.exp)
+		}
+	}
+}
+
+func TestIdentifierPrefixes(t *testing.T) {
+	cases := []struct {
+		in  string
+		exp []string
+	}{
+		{"tower", nil},
+		{"apps.tower", []string{"apps"}},
+		{"apps.web.frontend", []string{"apps", "apps.web"}},
+	}
+
+	for _, tc := range cases {
+		got := IdentifierPrefixes(tc.in)
+		if len(got) != len(tc.exp) {
+			t.Errorf("IdentifierPrefixes(%q) = %v, expected %v", tc.in, got, tc.exp)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.exp[i] {
+				t.Errorf("IdentifierPrefixes(%q) = %v, expected %v", tc.in, got, tc.exp)
+				break
+			}
 		}
 	}
 }
@@ -118,6 +150,46 @@ threatmodel "Fort Knox" {
   author = "@xntrik"
 }`,
 			"",
+		},
+		{
+			"nested_ids",
+			`threatmodel "Tower of London" {
+  id     = "apps.tower"
+  author = "@xntrik"
+}
+threatmodel "Bridge of London" {
+  id     = "apps.bridge"
+  author = "@xntrik"
+}
+threatmodel "The VPC" {
+  id     = "infra.network.vpc"
+  author = "@xntrik"
+}`,
+			"",
+		},
+		{
+			"id_is_anothers_namespace",
+			`threatmodel "Apps Portfolio" {
+  id     = "apps"
+  author = "@xntrik"
+}
+threatmodel "Tower of London" {
+  id     = "apps.tower"
+  author = "@xntrik"
+}`,
+			"id 'apps' is the namespace of id 'apps.tower'",
+		},
+		{
+			"namespace_collision_order_independent",
+			`threatmodel "Tower of London" {
+  id     = "apps.tower"
+  author = "@xntrik"
+}
+threatmodel "Apps Portfolio" {
+  id     = "apps"
+  author = "@xntrik"
+}`,
+			"id 'apps' is the namespace of id 'apps.tower'",
 		},
 	}
 
