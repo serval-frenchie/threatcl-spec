@@ -215,6 +215,14 @@ threatmodel "Buildings" {
 }`,
 			"",
 		},
+		{
+			"explicit_empty_id",
+			`threatmodel "Tower of London" {
+  id     = ""
+  author = "@xntrik"
+}`,
+			"id must not be empty when declared",
+		},
 	}
 
 	for _, tc := range cases {
@@ -239,6 +247,144 @@ threatmodel "Buildings" {
 			}
 		})
 	}
+}
+
+func TestParseJSONExplicitEmptyId(t *testing.T) {
+	in := `{"threatmodel": {"Tower of London": {"id": "", "author": "@xntrik"}}}`
+
+	defaultCfg := &ThreatmodelSpecConfig{}
+	defaultCfg.setDefaults()
+	tmParser := NewThreatmodelParser(defaultCfg)
+
+	err := tmParser.ParseJSONRaw([]byte(in))
+	if err == nil {
+		t.Fatalf("expected an error for explicit empty id, got none")
+	}
+	if !strings.Contains(err.Error(), "id must not be empty when declared") {
+		t.Errorf("expected empty-id error, got: %s", err)
+	}
+}
+
+func TestValidateUniqueIdentifiers(t *testing.T) {
+	cases := []struct {
+		name string
+		tms  []Threatmodel
+		exp  string // expected error substring; empty means valid
+	}{
+		{
+			"distinct declared and derived",
+			[]Threatmodel{
+				{Name: "Tower of London", Id: "tower"},
+				{Name: "Fort Knox"},
+			},
+			"",
+		},
+		{
+			"duplicate declared ids",
+			[]Threatmodel{
+				{Name: "Tower of London", Id: "tower"},
+				{Name: "Fort Knox", Id: "tower"},
+			},
+			"identifier 'tower' collides with TM 'Tower of London'",
+		},
+		{
+			"declared id collides with derived identifier",
+			[]Threatmodel{
+				{Name: "Fort Knox"},
+				{Name: "Tower of London", Id: "fort_knox"},
+			},
+			"identifier 'fort_knox' collides with TM 'Fort Knox'",
+		},
+		{
+			"derived identifiers collide across renamed-alike models",
+			[]Threatmodel{
+				{Name: "Fort Knox"},
+				{Name: "Fort Knox!"},
+			},
+			"identifier 'fort_knox' collides with TM 'Fort Knox'",
+		},
+		{
+			"invalid declared id",
+			[]Threatmodel{
+				{Name: "Tower of London", Id: "Tower"},
+			},
+			"invalid id 'Tower'",
+		},
+		{
+			"nameless idless models are skipped",
+			[]Threatmodel{
+				{},
+				{},
+			},
+			"",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := ValidateUniqueIdentifiers(tc.tms)
+			if tc.exp == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %s", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected an error containing %q, got none", tc.exp)
+			}
+			if !strings.Contains(err.Error(), tc.exp) {
+				t.Errorf("expected error to contain %q, got: %s", tc.exp, err)
+			}
+		})
+	}
+}
+
+func TestAddTMAndWriteIdValidation(t *testing.T) {
+	defaultCfg := &ThreatmodelSpecConfig{}
+	defaultCfg.setDefaults()
+
+	t.Run("invalid id rejected", func(t *testing.T) {
+		tmParser := NewThreatmodelParser(defaultCfg)
+		var out strings.Builder
+		err := tmParser.AddTMAndWrite(Threatmodel{Name: "Tower", Id: "Tower-Bad"}, &out, false)
+		if err == nil || !strings.Contains(err.Error(), "invalid id 'Tower-Bad'") {
+			t.Errorf("expected invalid id error, got: %v", err)
+		}
+		if out.Len() != 0 {
+			t.Errorf("expected nothing written on validation failure, got: %s", out.String())
+		}
+	})
+
+	t.Run("duplicate id rejected", func(t *testing.T) {
+		tmParser := NewThreatmodelParser(defaultCfg)
+		if err := tmParser.ParseHCLRaw([]byte(`threatmodel "Tower of London" {
+  id     = "tower"
+  author = "@xntrik"
+}`)); err != nil {
+			t.Fatal(err)
+		}
+
+		var out strings.Builder
+		err := tmParser.AddTMAndWrite(Threatmodel{Name: "Fort Knox", Id: "tower"}, &out, false)
+		if err == nil || !strings.Contains(err.Error(), "duplicate id 'tower'") {
+			t.Errorf("expected duplicate id error, got: %v", err)
+		}
+	})
+
+	t.Run("valid id accepted", func(t *testing.T) {
+		tmParser := NewThreatmodelParser(defaultCfg)
+		var out strings.Builder
+		err := tmParser.AddTMAndWrite(Threatmodel{Name: "Fort Knox", Id: "fort", Author: "@xntrik"}, &out, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if !strings.Contains(out.String(), `"fort"`) {
+			t.Errorf("expected written HCL to include the id, got: %s", out.String())
+		}
+	})
 }
 
 func TestThreatmodelIdRoundTrip(t *testing.T) {
