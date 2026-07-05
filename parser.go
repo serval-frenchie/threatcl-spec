@@ -107,7 +107,7 @@ func (p *ThreatmodelParser) validateTms() error {
 
 	p.wrapped.Threatmodels = newWrapped
 
-	tmIds := make(map[string]interface{})
+	tmIds := make(map[string]string)
 
 	for _, t := range p.wrapped.Threatmodels {
 		// Validating unique threatmodel name
@@ -126,7 +126,7 @@ func (p *ThreatmodelParser) validateTms() error {
 		if t.Id != "" {
 			if !ValidIdentifier(t.Id) {
 				errMap = multierror.Append(errMap, fmt.Errorf(
-					"TM '%s': invalid id '%s' - must be lowercase letters, digits or underscores, starting with a letter",
+					"TM '%s': invalid id '%s' - must be dot-separated segments of lowercase letters, digits or underscores, each starting with a letter",
 					t.Name,
 					t.Id,
 				))
@@ -138,7 +138,7 @@ func (p *ThreatmodelParser) validateTms() error {
 					t.Id,
 				))
 			}
-			tmIds[t.Id] = nil
+			tmIds[t.Id] = t.Name
 		}
 
 		// err := p.ValidateTm(&t)
@@ -147,6 +147,27 @@ func (p *ThreatmodelParser) validateTms() error {
 			errMap = multierror.Append(errMap, err)
 		}
 
+	}
+
+	// A declared id may not sit at another declared id's namespace: with ids
+	// "apps" and "apps.tower", "apps" would have to be both a model and a
+	// container in a reference tree. Second pass so ordering in the file
+	// doesn't matter.
+	for _, t := range p.wrapped.Threatmodels {
+		if t.Id == "" {
+			continue
+		}
+		for _, prefix := range IdentifierPrefixes(t.Id) {
+			if otherName, ok := tmIds[prefix]; ok {
+				errMap = multierror.Append(errMap, fmt.Errorf(
+					"TM '%s': id '%s' is the namespace of id '%s' (TM '%s') - an id can't be both a model and a namespace",
+					otherName,
+					prefix,
+					t.Id,
+					t.Name,
+				))
+			}
+		}
 	}
 
 	if errMap != nil {
