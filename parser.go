@@ -77,6 +77,27 @@ func (p *ThreatmodelParser) AddTMAndWrite(tm Threatmodel, f io.Writer, debug boo
 		spew.Dump(tm)
 	}
 
+	// A declared id gets the same validation here as at parse time:
+	// identifier-safe, and unique against the models already in the set.
+	if tm.Id != "" {
+		if !ValidIdentifier(tm.Id) {
+			return fmt.Errorf(
+				"TM '%s': invalid id '%s' - must be dot-separated segments of lowercase letters, digits or underscores, each starting with a letter",
+				tm.Name,
+				tm.Id,
+			)
+		}
+		for _, existing := range p.wrapped.Threatmodels {
+			if existing.Id == tm.Id {
+				return fmt.Errorf(
+					"TM '%s': duplicate id '%s'",
+					tm.Name,
+					tm.Id,
+				)
+			}
+		}
+	}
+
 	if p.wrapped.SpecVersion == "" {
 		// We haven't yet set the SpecVersion for this model, which may mean that we're adding a new TM to an existing wrapped object. Let's set it from the loaded CFG
 		p.wrapped.SpecVersion = p.specCfg.Version
@@ -107,7 +128,7 @@ func (p *ThreatmodelParser) validateTms() error {
 
 	p.wrapped.Threatmodels = newWrapped
 
-	tmIds := make(map[string]interface{})
+	tmIds := make(map[string]string)
 
 	for _, t := range p.wrapped.Threatmodels {
 		// Validating unique threatmodel name
@@ -126,7 +147,7 @@ func (p *ThreatmodelParser) validateTms() error {
 		if t.Id != "" {
 			if !ValidIdentifier(t.Id) {
 				errMap = multierror.Append(errMap, fmt.Errorf(
-					"TM '%s': invalid id '%s' - must be lowercase letters, digits or underscores, starting with a letter",
+					"TM '%s': invalid id '%s' - must be dot-separated segments of lowercase letters, digits or underscores, each starting with a letter",
 					t.Name,
 					t.Id,
 				))
@@ -138,7 +159,7 @@ func (p *ThreatmodelParser) validateTms() error {
 					t.Id,
 				))
 			}
-			tmIds[t.Id] = nil
+			tmIds[t.Id] = t.Name
 		}
 
 		// err := p.ValidateTm(&t)
@@ -147,6 +168,43 @@ func (p *ThreatmodelParser) validateTms() error {
 			errMap = multierror.Append(errMap, err)
 		}
 
+	}
+
+	// A model may sit at another model's namespace — id "buildings" with
+	// children "buildings.tower", "buildings.bridge" — since reference trees
+	// place children alongside the parent model's fields. That coexistence is
+	// exactly why a child's segment directly beneath a parent model's id
+	// can't be a threat model field name: "buildings.threats" would shadow
+	// the parent's threats. Second pass so ordering in the file doesn't
+	// matter.
+	for _, t := range p.wrapped.Threatmodels {
+		if t.Id == "" {
+			continue
+		}
+		for _, prefix := range IdentifierPrefixes(t.Id) {
+			if _, ok := tmIds[prefix]; !ok {
+				continue
+			}
+			segment := t.Id[len(prefix)+1:]
+			if dot := strings.Index(segment, "."); dot >= 0 {
+				segment = segment[:dot]
+			}
+			if ReservedIdSegment(segment) {
+				errMap = multierror.Append(errMap, fmt.Errorf(
+					"TM '%s': id '%s' uses reserved segment '%s' directly beneath model id '%s' (TM '%s') - it would shadow that threat model's '%s' field in references",
+					t.Name,
+					t.Id,
+					segment,
+					prefix,
+					tmIds[prefix],
+					segment,
+				))
+			}
+		}
+	}
+
+	if err := p.resolveExtends(); err != nil {
+		errMap = multierror.Append(errMap, err)
 	}
 
 	if errMap != nil {
@@ -255,6 +313,60 @@ func (p *ThreatmodelParser) buildVarCtx(ctx *hcl.EvalContext, varMap map[string]
 
 	ctx.Variables["var"] = cty.ObjectVal(varMapOut)
 
+}
+
+// checkEmptyIds does a shallow parsing of an HCL file looking for
+// 'threatmodel' blocks that declare a literal empty id. After decoding, an
+// empty string is indistinguishable from an absent optional attribute — which
+// would let `id = ""` silently bypass id validation — so the check has to
+// happen here at the syntax level. Non-literal expressions (e.g. var
+// references) are skipped; their decoded values are validated after parsing
+// like any other declared id.
+func checkEmptyIds(f *hcl.File) error {
+	var errMap error
+
+	extract, _, diags := f.Body.PartialContent(&hcl.BodySchema{
+		Blocks: []hcl.BlockHeaderSchema{
+			{
+				Type:       "threatmodel",
+				LabelNames: []string{"name"},
+			},
+		},
+	})
+
+	if diags.HasErrors() {
+		return diags
+	}
+
+	for _, b := range extract.Blocks {
+		attributeExtract, _, _ := b.Body.PartialContent(&hcl.BodySchema{
+			Attributes: []hcl.AttributeSchema{
+				{
+					Name: "id",
+				},
+			},
+		})
+
+		attr, exist := attributeExtract.Attributes["id"]
+		if !exist {
+			continue
+		}
+
+		idVal := ""
+		attrDiags := gohcl.DecodeExpression(attr.Expr, nil, &idVal)
+		if attrDiags.HasErrors() {
+			continue
+		}
+
+		if idVal == "" && len(b.Labels) > 0 {
+			errMap = multierror.Append(errMap, fmt.Errorf(
+				"TM '%s': id must not be empty when declared",
+				b.Labels[0],
+			))
+		}
+	}
+
+	return errMap
 }
 
 // extractImports does a shallow parsing of an HCL file looking for
@@ -436,6 +548,12 @@ func (p *ThreatmodelParser) parseHCL(f *hcl.File, filename string, isChild bool)
 	// (process.<slug>, information_asset.<slug>, ...) are built for child
 	// files too.
 	p.buildRefCtx(ctx, extractRefSlugs(f))
+
+	// A literal `id = ""` is indistinguishable from an absent id after
+	// decoding, so it is rejected at the syntax level.
+	if err := checkEmptyIds(f); err != nil {
+		return err
+	}
 
 	// var diags hcl.Diagnostics
 
