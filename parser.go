@@ -82,7 +82,7 @@ func (p *ThreatmodelParser) AddTMAndWrite(tm Threatmodel, f io.Writer, debug boo
 	if tm.Id != "" {
 		if !ValidIdentifier(tm.Id) {
 			return fmt.Errorf(
-				"TM '%s': invalid id '%s' - must be lowercase letters, digits or underscores, starting with a letter",
+				"TM '%s': invalid id '%s' - must be dot-separated segments of lowercase letters, digits or underscores, each starting with a letter",
 				tm.Name,
 				tm.Id,
 			)
@@ -128,7 +128,7 @@ func (p *ThreatmodelParser) validateTms() error {
 
 	p.wrapped.Threatmodels = newWrapped
 
-	tmIds := make(map[string]interface{})
+	tmIds := make(map[string]string)
 
 	for _, t := range p.wrapped.Threatmodels {
 		// Validating unique threatmodel name
@@ -147,7 +147,7 @@ func (p *ThreatmodelParser) validateTms() error {
 		if t.Id != "" {
 			if !ValidIdentifier(t.Id) {
 				errMap = multierror.Append(errMap, fmt.Errorf(
-					"TM '%s': invalid id '%s' - must be lowercase letters, digits or underscores, starting with a letter",
+					"TM '%s': invalid id '%s' - must be dot-separated segments of lowercase letters, digits or underscores, each starting with a letter",
 					t.Name,
 					t.Id,
 				))
@@ -159,7 +159,7 @@ func (p *ThreatmodelParser) validateTms() error {
 					t.Id,
 				))
 			}
-			tmIds[t.Id] = nil
+			tmIds[t.Id] = t.Name
 		}
 
 		// err := p.ValidateTm(&t)
@@ -168,6 +168,43 @@ func (p *ThreatmodelParser) validateTms() error {
 			errMap = multierror.Append(errMap, err)
 		}
 
+	}
+
+	// A model may sit at another model's namespace — id "buildings" with
+	// children "buildings.tower", "buildings.bridge" — since reference trees
+	// place children alongside the parent model's fields. That coexistence is
+	// exactly why a child's segment directly beneath a parent model's id
+	// can't be a threat model field name: "buildings.threats" would shadow
+	// the parent's threats. Second pass so ordering in the file doesn't
+	// matter.
+	for _, t := range p.wrapped.Threatmodels {
+		if t.Id == "" {
+			continue
+		}
+		for _, prefix := range IdentifierPrefixes(t.Id) {
+			if _, ok := tmIds[prefix]; !ok {
+				continue
+			}
+			segment := t.Id[len(prefix)+1:]
+			if dot := strings.Index(segment, "."); dot >= 0 {
+				segment = segment[:dot]
+			}
+			if ReservedIdSegment(segment) {
+				errMap = multierror.Append(errMap, fmt.Errorf(
+					"TM '%s': id '%s' uses reserved segment '%s' directly beneath model id '%s' (TM '%s') - it would shadow that threat model's '%s' field in references",
+					t.Name,
+					t.Id,
+					segment,
+					prefix,
+					tmIds[prefix],
+					segment,
+				))
+			}
+		}
+	}
+
+	if err := p.resolveExtends(); err != nil {
+		errMap = multierror.Append(errMap, err)
 	}
 
 	if errMap != nil {

@@ -162,11 +162,20 @@ type DataFlowDiagram struct {
 
 type Threatmodel struct {
 	Name string `json:"name" hcl:"name,label"`
-	// Id is an optional stable, identifier-safe handle for the threat model
-	// (^[a-z][a-z0-9_]*$, unique within a parsed set). Unlike Name — an
-	// arbitrary display string — a declared id survives renames and can be
-	// used in dotted references by tooling. See Identifier().
-	Id                     string                  `json:"id,omitempty" hcl:"id,optional"`
+	// Id is an optional stable, identifier-safe handle for the threat model:
+	// dot-separated lowercase segments, unique within a parsed set. Unlike
+	// Name — an arbitrary display string — a declared id survives renames and
+	// can be used in dotted references by tooling. Dotted ids place the model
+	// in a namespace hierarchy (a model with id "buildings" may have children
+	// "buildings.tower", "buildings.bridge"). See Identifier().
+	Id string `json:"id,omitempty" hcl:"id,optional"`
+	// Extends names another threat model's declared id in the same parsed
+	// set. The extending model inherits the parent's collections (threats,
+	// information assets, use cases, exclusions, third-party dependencies —
+	// same-named items in the child win) and its attributes block when the
+	// child declares none. Purely declarative: a dotted id alone does NOT
+	// imply inheritance.
+	Extends                string                  `json:"extends,omitempty" hcl:"extends,optional"`
 	Description            string                  `json:"description,omitempty" hcl:"description,optional"`
 	Imports                []string                `json:"-" hcl:"imports,optional"`
 	Including              string                  `json:"including,omitempty" hcl:"including,optional"`

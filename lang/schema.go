@@ -118,7 +118,8 @@ func threatmodelBlock(cfg *spec.ThreatmodelSpecConfig) BlockSchema {
 		Body: BodySchema{
 			Attrs: []AttrSchema{
 				{Name: "author", Required: true, Type: "string", Doc: "Who authored this threat model."},
-				{Name: "id", Type: "string", Doc: "Optional stable identifier-safe handle (lowercase letters, digits, underscores; starts with a letter; unique). Unlike the name, it survives renames and can be used in dotted references by tooling."},
+				{Name: "id", Type: "string", Doc: "Optional stable identifier-safe handle: dot-separated segments of lowercase letters, digits and underscores, each starting with a letter (e.g. \"tower\" or \"buildings.tower\"); unique. A dotted id may nest beneath another model's id (that model is the parent at the namespace address), as long as the segment directly beneath it isn't a threat model field name. Unlike the name, an id survives renames and can be used in dotted references by tooling."},
+				{Name: "extends", Type: "string", Doc: "Another threat model's declared id (same parsed set). Inherits that model's threats, information assets, use cases, exclusions and third-party dependencies (same-named items here win) plus its attributes block when this model declares none. Inheritance is always explicit — a dotted id alone doesn't inherit."},
 				{Name: "description", Type: "string", Doc: "Free-text description of the system being modelled."},
 				{Name: "link", Type: "string", Doc: "A URL with more detail about this system."},
 				{Name: "diagram_link", Type: "string", Doc: "A URL to an externally-hosted diagram."},
