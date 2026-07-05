@@ -1,6 +1,11 @@
 package spec
 
-import "regexp"
+import (
+	"fmt"
+	"regexp"
+
+	"github.com/hashicorp/go-multierror"
+)
 
 // identifierRe constrains declared threat model ids to lowercase
 // identifier-safe tokens: usable as an HCL traversal part (so tooling can
@@ -33,4 +38,50 @@ func (tm *Threatmodel) Identifier() string {
 		return tm.Id
 	}
 	return DeriveIdentifier(tm.Name)
+}
+
+// ValidateUniqueIdentifiers checks a set of threat models for identifier
+// collisions. Parse-time validation only ever sees one file's models, so
+// consumers that aggregate models across files (e.g. to build a reference
+// registry keyed by Identifier()) should run their combined set through this
+// before relying on identifiers as addresses.
+//
+// Every declared id must be identifier-safe, and no two models may share an
+// effective Identifier() — declared or derived — since a registry needs one
+// address per model. Derived identifiers are only collision-checked, never
+// format-checked: a derivation like "3rd Party Gateway" → "3rd_party_gateway"
+// isn't addressable in dotted form but is still a legal registry key.
+func ValidateUniqueIdentifiers(tms []Threatmodel) error {
+	var errMap error
+	seen := map[string]string{} // identifier → name of the model that claimed it
+
+	for i := range tms {
+		tm := &tms[i]
+
+		if tm.Id != "" && !ValidIdentifier(tm.Id) {
+			errMap = multierror.Append(errMap, fmt.Errorf(
+				"TM '%s': invalid id '%s' - must be lowercase letters, digits or underscores, starting with a letter",
+				tm.Name,
+				tm.Id,
+			))
+		}
+
+		ident := tm.Identifier()
+		if ident == "" {
+			continue
+		}
+
+		if otherName, ok := seen[ident]; ok {
+			errMap = multierror.Append(errMap, fmt.Errorf(
+				"TM '%s': identifier '%s' collides with TM '%s'",
+				tm.Name,
+				ident,
+				otherName,
+			))
+			continue
+		}
+		seen[ident] = tm.Name
+	}
+
+	return errMap
 }
